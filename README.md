@@ -1,1 +1,1 @@
-# radiology-ssl
+# Radiology Self-Supervised Learning

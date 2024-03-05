@@ -374,12 +374,12 @@ def brats_preprocess():
         print(">> Subset {}".format(subset))
         brats_subset_path = os.path.join(config.DATA_DIR, subset)
         folder_list = os.listdir(os.path.join(brats_subset_path))
-        for i, folder in enumerate(tqdm(folder_list)):
-            print(">> Sample {}/{}".format(i, len(folder_list)))
+        for folder in tqdm(folder_list, desc='Folders parsed'):
+            # print(">> Sample {}/{}".format(i, len(folder_list)))
             file_list = glob(os.path.join(brats_subset_path, folder, "*.nii.gz"))
             save_dir = os.path.join(save_path, subset, folder)
             os.makedirs(save_dir, exist_ok=True)
-            for j, img_file in enumerate(tqdm(file_list)):
+            for img_file in tqdm(file_list, desc='Images in folder parsed', leave=False):
                 img_name = os.path.split(img_file)[-1]
                 img_array = load_sitk_with_resample(img_file)
                 img_array = sitk.GetArrayFromImage(img_array)
@@ -402,7 +402,7 @@ def luna_preprocess(fold):
         file_list = glob(os.path.join(luna_subset_path, "*.mhd"))
         save_dir = os.path.join(save_path, 'subset' + str(index_subset))
         os.makedirs(save_dir, exist_ok=True)
-        for i, img_file in enumerate(tqdm(file_list)):
+        for img_file in tqdm(file_list, leave=False, desc='Images in fold parsed'):
             img_name = os.path.split(img_file)[-1]
             img_array = load_sitk_with_resample(img_file)
             img_array = sitk.GetArrayFromImage(img_array)

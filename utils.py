@@ -10,6 +10,7 @@ import torch.nn.functional as F
 import segmentation_models_pytorch as smp
 from models import PCRLv23d, PCRLv2, SegmentationModel, UNet3D
 
+
 def set_seed(seed):
     os.environ['PYTHONHASHSEED'] = str(seed)
     torch.manual_seed(seed)
@@ -295,7 +296,7 @@ def get_luna_finetune_nodule(config, train_fold, valid_txt, test_txt, suffix, fi
     return x_train, x_valid, x_test
 
 
-def divide__luna_true_positive(data_list):
+def divide_luna_true_positive(data_list):
     true_list = []
     false_list = []
     for i in data_list:
@@ -435,10 +436,12 @@ def thor_dice_loss(input, target, train=True):
     print(f'label1 dice {es_dice}, label2 dice {tra_dice}, label3 dice{aor_dice}, label4 dice{heart_dice}')
     return es_dice + tra_dice + aor_dice + heart_dice
 
+
 def get_loss(dataset):
     loss_fun_name = dataset + '_dice_loss'
     loss_fun = globals()[loss_fun_name]
     return loss_fun
+
 
 def brats_dice_loss(input, target, train=True):
     wt_loss = bceDiceLoss(input[:, 0], target[:, 0], train)
@@ -447,10 +450,12 @@ def brats_dice_loss(input, target, train=True):
     print(f'wt loss: {wt_loss}, tc_loss : {tc_loss}, et_loss: {et_loss}')
     return wt_loss + tc_loss + et_loss
 
+
 def lits_dice_loss(input, target, train=True):
     loss = bceDiceLoss(input, target, train)
     print(f'loss: {loss}')
     return loss
+
 
 def sinkhorn(args, Q: torch.Tensor, nmb_iters: int) -> torch.Tensor:
     with torch.no_grad():
@@ -475,3 +480,25 @@ def sinkhorn(args, Q: torch.Tensor, nmb_iters: int) -> torch.Tensor:
             Q *= (c / torch.sum(Q, dim=0)).unsqueeze(0)
 
         return (Q / torch.sum(Q, dim=0, keepdim=True)).t().float()
+
+
+def get_roi_align_coords(box1, box2):
+    
+    # Box dimensions
+    h1, w1 = box1.shape
+    h2, w2 = box2.shape
+
+    # Calculate interesection of the two boxes
+    x1 = torch.max(box1[0], box2[0])
+    y1 = torch.max(box1[1], box2[1])
+    x2 = torch.min(box1[2], box2[2])
+    y2 = torch.min(box1[3], box2[3])
+
+    # Intersecting box in relation to bbox 1
+    # z-dim is ommited because the intersection is the same at z-axis (already aligned)
+    ibox1 = ((x1-box1[0])/h1, (y1-box1[1])/w1, (x2-box1[0])/h1, (y2-box1[1])/w1)  
+
+    # Intersecting box in relation to bbox 2
+    ibox2 = ((x1-box2[0])/h2, (y1-box2[1])/w2, (x2-box2[0])/h2, (y2-box2[0])/w2)
+
+    return ibox1, ibox2

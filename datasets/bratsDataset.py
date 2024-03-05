@@ -1,6 +1,7 @@
 import os
 import random
 import copy
+import pandas as pd
 
 import nibabel as nib
 import numpy as np
@@ -20,17 +21,22 @@ class Pcrlv2BraTSPretask(Dataset):
         self.global_transforms = global_transforms
         self.local_transforms = local_transforms
         self.norm = torchio.transforms.ZNormalization()
+        self.coords = pandas.read_csv(os.path.join(config.data),'crop_coords.csv', names=['path','crop1','crop2'], index_col='path')  # coordinates of each pair of crops
+
 
     def __len__(self):
         return len(self.imgs)
 
     def __getitem__(self, index):
+        # Load data
         image_name = self.imgs[index]
         pair = np.load(image_name)
         crop1 = pair[0]
         crop1 = np.expand_dims(crop1, axis=0)
         crop2 = pair[1]
         crop2 = np.expand_dims(crop2, axis=0)
+        crop1_coords = self.coords[self.coords['path']==image_name]['crop1']
+        crop2_coords = self.coords[self.coords['path']==image_name]['crop2']
 
         input1 = self.transform(crop1)
         input2 = self.transform(crop2)
@@ -51,7 +57,7 @@ class Pcrlv2BraTSPretask(Dataset):
 
         return torch.tensor(input1, dtype=torch.float), torch.tensor(input2, dtype=torch.float), \
             torch.tensor(gt1, dtype=torch.float), \
-            torch.tensor(gt2, dtype=torch.float), local_inputs
+            torch.tensor(gt2, dtype=torch.float), crop1_coords, crop2_coords, local_inputs
 
 
 class BratsFineTune(Dataset):

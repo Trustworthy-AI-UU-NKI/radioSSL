@@ -244,9 +244,9 @@ class DataGenerator:
                                                             suffix='.npy',
                                                             file_list=file_list)
         print(len(x_train))
-        train_ds_true, train_ds_false = divide__luna_true_positive(x_train)
-        valid_ds_true, valid_ds_false = divide__luna_true_positive(x_valid)
-        test_ds_true, test_ds_false = divide__luna_true_positive(x_test)
+        train_ds_true, train_ds_false = divide_luna_true_positive(x_train)
+        valid_ds_true, valid_ds_false = divide_luna_true_positive(x_valid)
+        test_ds_true, test_ds_false = divide_luna_true_positive(x_test)
 
         train_ds = LunaFineTune(args, train_ds_true, train_ds_false, train=True)
         valid_ds = LunaFineTune(args, valid_ds_true, valid_ds_false, train=False)

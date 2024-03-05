@@ -25,7 +25,7 @@ if __name__ == '__main__':
     parser.add_argument('--epochs', default=100, type=int, help='epochs to train')
     parser.add_argument('--lr', default=1e-3, type=float, help='learning rate')
     parser.add_argument('--output', default='None', type=str, help='output path')
-    parser.add_argument('--n', default='luna', type=str, help='dataset to use')
+    parser.add_argument('--n', default='luna', choices=['luna', 'lits', 'brats'], type=str, help='dataset to use')
     parser.add_argument('--d', default=3, type=int, help='3d or 2d to run')
     parser.add_argument('--workers', default=4, type=int, help='num of workers')
     parser.add_argument('--gpus', default='0,1,2,3', type=str, help='gpu indexs')

@@ -21,6 +21,7 @@ from multiprocessing import Pool
 sys.setrecursionlimit(40000)
 
 parser = OptionParser()
+parser.add_option("--n", dest="n", help='dataset to use', default="luna", choices=['luna', 'lits', 'brats'], type="choice")
 parser.add_option("--fold", dest="fold", help="fold of subset", default=None, type="int")
 parser.add_option("--input_rows", dest="input_rows", help="input rows", default=64, type="int")
 parser.add_option("--input_cols", dest="input_cols", help="input cols", default=64, type="int")
@@ -28,17 +29,19 @@ parser.add_option("--input_deps", dest="input_deps", help="input deps", default=
 parser.add_option("--crop_rows", dest="crop_rows", help="crop rows", default=64, type="int")
 parser.add_option("--crop_cols", dest="crop_cols", help="crop cols", default=64, type="int")
 parser.add_option("--lung_max", dest="lung_max", help="lung max", default=0.15, type="int")
-parser.add_option("--data", dest="data", help="the directory of LUNA16 dataset", default='/data1/luchixiang/LUNA16',
+parser.add_option("--data", dest="data", help="the directory of the dataset", default='/data/LUNA16',
                   type="string")
 parser.add_option("--save", dest="save", help="the directory of processed 3D cubes",
-                  default='/data1/luchixiang/LUNA16/shuffle2.5', type="string")
+                  default=None, type="string")
 parser.add_option("--scale", dest="scale", help="scale of the generator", default=16, type="int")
 parser.add_option('--z_align', action='store_true', dest='z_align', default=False, help='z dim align when cropping')
+parser.add_option('--seed', default=1, type="int")
+
 (options, args) = parser.parse_args()
 fold = options.fold
-
-seed = 1
+seed = options.seed
 random.seed(seed)
+print(f'Seed: {seed}')
 
 assert options.data is not None
 assert options.save is not None
@@ -123,29 +126,60 @@ local_col_size = [(32, 32, 16), (16, 16, 16), (32, 32, 32), (8, 8, 8)]
 local_input_rows, local_input_cols, local_input_depth = (16, 16, 16)
 
 
-def infinite_generator_from_one_volume(img_array, save_dir, name):
-    
-    csv_lines = []
-    
-    img_array[img_array < config.hu_min] = config.hu_min
-    img_array[img_array > config.hu_max] = config.hu_max
-    img_array = 1.0 * (img_array - config.hu_min) / (config.hu_max - config.hu_min)
-    num_pair = 0
-    while True:
-        crop_window1, crop_window2, local_windows, ibox_1, ibox_2 = crop_pair(img_array, z_align=config.z_align)
-        crop_window = np.stack((crop_window1, crop_window2), axis=0)
-        # crop_window = np.concatenate([crop_window, local_windows], axis=0)
-        # print(crop_window.shape)
-        global_path = os.path.join(save_dir, name + '_global_' + str(num_pair) + '.npy')
-        local_path = os.path.join(save_dir, name + '_local_' + str(num_pair)  + '.npy')
-        np.save(global_path, crop_window)
-        np.save(local_path, local_windows)
-        csv_lines.append(f'{global_path},{ibox1[0]},{ibox1[1]},{ibox1[2]},{ibox1[3]},{ibox2[0]},{ibox2[1]},{ibox2[2]},{ibox2[3]}')
-        num_pair += 1
-        if num_pair == config.scale:
-            break
+def load_sitk_with_resample(img_path):
+    outsize = [0, 0, 0]
+    outspacing = [1, 1, 1]
 
-    return csv_lines
+    # 读取文件的size和spacing信息
+    vol = sitk.ReadImage(img_path)
+    tmp = sitk.GetArrayFromImage(vol)
+    inputsize = vol.GetSize()
+    inputspacing = vol.GetSpacing()
+
+    transform = sitk.Transform()
+    transform.SetIdentity()
+    # 计算改变spacing后的size，用物理尺寸/体素的大小
+    outsize[0] = int(inputsize[0] * inputspacing[0] / outspacing[0] + 0.5)
+    outsize[1] = int(inputsize[1] * inputspacing[1] / outspacing[1] + 0.5)
+    outsize[2] = int(inputsize[2] * inputspacing[2] / outspacing[2] + 0.5)
+
+    # 设定重采样的一些参数
+    resampler = sitk.ResampleImageFilter()
+    resampler.SetTransform(transform)
+    resampler.SetInterpolator(sitk.sitkLinear)
+    resampler.SetOutputOrigin(vol.GetOrigin())
+    resampler.SetOutputSpacing(outspacing)
+    resampler.SetOutputDirection(vol.GetDirection())
+    resampler.SetSize(outsize)
+    newvol = resampler.Execute(vol)
+    return newvol
+
+
+def cal_iou(box1, box2):
+    """
+    :param box1: = [xmin1, ymin1, xmax1, ymax1]
+    :param box2: = [xmin2, ymin2, xmax2, ymax2]
+    :return:
+    """
+    xmin1, xmax1, ymin1, ymax1, zmin1, zmax1 = box1
+    xmin2, xmax2, ymin2, ymax2, zmin2, zmax2 = box2
+    # 计算每个矩形的面积
+    s1 = (xmax1 - xmin1) * (ymax1 - ymin1) * (zmax1 - zmin1)  # C的面积
+    s2 = (xmax2 - xmin2) * (ymax2 - ymin2) * (zmax2 - zmin2)  # G的面积
+
+    # 计算相交矩形
+    xmin = max(xmin1, xmin2)
+    ymin = max(ymin1, ymin2)
+    xmax = min(xmax1, xmax2)
+    ymax = min(ymax1, ymax2)
+    zmin = max(zmin1, zmin2)
+    zmax = min(zmax1, zmax2)
+    w = max(0, xmax - xmin)
+    h = max(0, ymax - ymin)
+    d = max(0, zmax - zmin)
+    area = w * h * d  # C∩G的面积
+    iou = area / (s1 + s2 - area)
+    return iou
 
 
 def crop_pair(img_array, z_align = False):
@@ -191,9 +225,9 @@ def crop_pair(img_array, z_align = False):
             else:
                 start_z2 = random.randint(0 + config.len_border_z,
                                         size_z - crop_deps2 - config.len_depth - 1 - config.len_border_z)          
-            box1 = (start_x1, start_x1 + crop_rows1, start_y1, start_y1 + crop_cols1, start_z1, start_z1 + crop_deps1)
-            box2 = (start_x2, start_x2 + crop_rows2, start_y2, start_y2 + crop_cols2, start_z2, start_z2 + crop_deps2)
-            iou = cal_iou(box1, box2)
+            crop_coords1 = (start_x1, start_x1 + crop_rows1, start_y1, start_y1 + crop_cols1, start_z1, start_z1 + crop_deps1)
+            crop_coords2 = (start_x2, start_x2 + crop_rows2, start_y2, start_y2 + crop_cols2, start_z2, start_z2 + crop_deps2)
+            iou = cal_iou(crop_coords1, crop_coords2)
             # print(iou, start_x1, start_y1, start_z1, start_x2, start_y2, start_z2)
             if iou > 0.3:
                 break
@@ -256,12 +290,12 @@ def crop_pair(img_array, z_align = False):
         if np.sum(d_img2) > config.lung_max * crop_cols1 * crop_deps1 * crop_rows1:
             continue
         # we start to crop the local windows
-        x_min = min(box1[0], box2[0])
-        x_max = max(box1[1], box2[1])
-        y_min = min(box1[2], box2[2])
-        y_max = max(box1[3], box2[3])
-        z_min = min(box1[4], box2[4])
-        z_max = max(box1[5], box2[5])
+        x_min = min(crop_coords1[0], crop_coords2[0])
+        x_max = max(crop_coords1[1], crop_coords2[1])
+        y_min = min(crop_coords1[2], crop_coords2[2])
+        y_max = max(crop_coords1[3], crop_coords2[3])
+        z_min = min(crop_coords1[4], crop_coords2[4])
+        z_max = max(crop_coords1[5], crop_coords2[5])
         local_windows = []
         for i in range(6):
 
@@ -281,35 +315,61 @@ def crop_pair(img_array, z_align = False):
                                   )
             local_windows.append(local_window)
 
-        ibox1 = ()
-        ibox2 = ()
+        # ibox1 = ()
+        # ibox2 = ()
         
-        if z_align:
-        # Save the coordinates of the intersecting box (ibox) with relation to bbox 1 and bbox2
+        # if z_align:
+        # # Save the coordinates of the intersecting box (ibox) with relation to bbox 1 and bbox2
             
-            # Intersecting box in relation to bbox 1
-            x1 = torch.max(box1[0], box2[0]) - box1[0] / crop_rows1
-            y1 = torch.max(box1[1], box2[1]) - box1[1] / crop_cols1
-            x2 = torch.min(box1[2], box2[2]) - box1[0] / crop_rows1
-            y2 = torch.min(box1[3], box2[3]) - box1[1] / crop_cols1
-            ibox1 = (x1, y1, x2, y2)  # z-dim is ommited because the intersection is the same (already aligned)
+        #     # Intersecting box in relation to bbox 1
+        #     x1 = torch.max(box1[0], box2[0]) - box1[0] / crop_rows1
+        #     y1 = torch.max(box1[1], box2[1]) - box1[1] / crop_cols1
+        #     x2 = torch.min(box1[2], box2[2]) - box1[0] / crop_rows1
+        #     y2 = torch.min(box1[3], box2[3]) - box1[1] / crop_cols1
+        #     ibox1 = (x1, y1, x2, y2, z1)  # z-dim is ommited because the intersection is the same (already aligned)
 
-            # Intersecting box in relation to bbox 2
-            x1 = torch.max(box1[0], box2[0]) - box2[0] / crop_rows2
-            y1 = torch.max(box1[1], box2[1]) - box2[1] / crop_cols2
-            x2 = torch.min(box1[2], box2[2]) - box2[0] / crop_rows2
-            y2 = torch.min(box1[3], box2[3]) - box2[1] / crop_cols2
-            ibox2 = (x1, y1, x2, y2)
-
-
-        return crop_window1[:, :, :input_depth], crop_window2[:, :, :input_depth], np.stack(local_windows, axis=0), ibox1, ibox2
+        #     # Intersecting box in relation to bbox 2
+        #     x1 = torch.max(box1[0], box2[0]) - box2[0] / crop_rows2
+        #     y1 = torch.max(box1[1], box2[1]) - box2[1] / crop_cols2
+        #     x2 = torch.min(box1[2], box2[2]) - box2[0] / crop_rows2
+        #     y2 = torch.min(box1[3], box2[3]) - box2[1] / crop_cols2
+        #     ibox2 = (x1, y1, x2, y2)
 
 
-def get_self_learning_data():
+        return crop_window1[:, :, :input_depth], crop_window2[:, :, :input_depth], np.stack(local_windows, axis=0), crop_coords1, crop_coords2
+
+
+def infinite_generator_from_one_volume(img_array, save_dir, name):
+    
+    csv_lines = []
+    
+    img_array[img_array < config.hu_min] = config.hu_min
+    img_array[img_array > config.hu_max] = config.hu_max
+    img_array = 1.0 * (img_array - config.hu_min) / (config.hu_max - config.hu_min)
+    num_pair = 0
+    while True:
+        crop_window1, crop_window2, local_windows, crop_coords1, crop_coords2 = crop_pair(img_array, z_align=config.z_align)
+        crop_window = np.stack((crop_window1, crop_window2), axis=0)
+        # crop_window = np.concatenate([crop_window, local_windows], axis=0)
+        # print(crop_window.shape)
+        global_path = os.path.join(save_dir, name + '_global_' + str(num_pair) + '.npy')
+        local_path = os.path.join(save_dir, name + '_local_' + str(num_pair)  + '.npy')
+        np.save(global_path, crop_window)
+        np.save(local_path, local_windows)
+        csv_lines.append([global_path,crop_coords1,crop_coords2])
+        num_pair += 1
+        if num_pair == config.scale:
+            break
+
+    return csv_lines
+
+
+def brats_preprocess():
     save_path = config.SAVE_DIR
 
-    csv_lines = []
-
+    csv_file = open(os.path.join(save_path,'crop_coords.csv'), 'w', newline='\n')
+    csv_writer = csv.writer(csv_file)
+    
     for subset in ['HGG', 'LGG']:
         print(">> Subset {}".format(subset))
         brats_subset_path = os.path.join(config.DATA_DIR, subset)
@@ -324,68 +384,45 @@ def get_self_learning_data():
                 img_array = load_sitk_with_resample(img_file)
                 img_array = sitk.GetArrayFromImage(img_array)
                 img_array = img_array.transpose(2, 1, 0)
-                # print(img_array.shape)
-                volume_csv_lines = infinite_generator_from_one_volume(img_array, save_dir, img_name[:-4])
+                img_csv_rows = infinite_generator_from_one_volume(img_array, save_dir, img_name[:-4])
+                csv_writer.writerows(img_csv_rows)
+                csv_file.flush()
 
-                csv_lines += img_csv_lines
+    csv_file.close()
 
-    csv_doc = ';'.join(csv_lines)
-        
+def luna_preprocess(fold):
+    save_path = config.SAVE_DIR
+
+    csv_file = open(os.path.join(save_path,'crop_coords.csv'), 'w', newline='\n')
+    csv_writer = csv.writer(csv_file)
+
+    for index_subset in fold:
+        print(">> Fold {}".format(index_subset))
+        luna_subset_path = os.path.join(config.DATA_DIR, "subset" + str(index_subset))
+        file_list = glob(os.path.join(luna_subset_path, "*.mhd"))
+        save_dir = os.path.join(save_path, 'subset' + str(index_subset))
+        os.makedirs(save_dir, exist_ok=True)
+        for i, img_file in enumerate(tqdm(file_list)):
+            img_name = os.path.split(img_file)[-1]
+            img_array = load_sitk_with_resample(img_file)
+            img_array = sitk.GetArrayFromImage(img_array)
+            img_array = img_array.transpose(2, 1, 0)
+            img_csv_rows = infinite_generator_from_one_volume(img_array, save_dir, img_name[:-4])
+            csv_rows += img_csv_rows
+            csv_writer.writerows(csv_rows)
+            csv_file.flush()
+
+    csv_file.close()
     
-def cal_iou(box1, box2):
-    """
-    :param box1: = [xmin1, ymin1, xmax1, ymax1]
-    :param box2: = [xmin2, ymin2, xmax2, ymax2]
-    :return:
-    """
-    xmin1, xmax1, ymin1, ymax1, zmin1, zmax1 = box1
-    xmin2, xmax2, ymin2, ymax2, zmin2, zmax2 = box2
-    # 计算每个矩形的面积
-    s1 = (xmax1 - xmin1) * (ymax1 - ymin1) * (zmax1 - zmin1)  # C的面积
-    s2 = (xmax2 - xmin2) * (ymax2 - ymin2) * (zmax2 - zmin2)  # G的面积
 
-    # 计算相交矩形
-    xmin = max(xmin1, xmin2)
-    ymin = max(ymin1, ymin2)
-    xmax = min(xmax1, xmax2)
-    ymax = min(ymax1, ymax2)
-    zmin = max(zmin1, zmin2)
-    zmax = min(zmax1, zmax2)
-    w = max(0, xmax - xmin)
-    h = max(0, ymax - ymin)
-    d = max(0, zmax - zmin)
-    area = w * h * d  # C∩G的面积
-    iou = area / (s1 + s2 - area)
-    return iou
+# Main execution    
+if options.n == 'luna':
+    assert options.lung_max == 0.15
+    with Pool(5) as p:
+        p.map(luna_preprocess, [[0, 1], [2, 3], [4, 5], [6, 7], [8, 9]])
+elif options.n == 'brats':
+    assert options.lung_max == 1
+    brats_preprocess()
 
+    
 
-def load_sitk_with_resample(img_path):
-    outsize = [0, 0, 0]
-    outspacing = [1, 1, 1]
-
-    # 读取文件的size和spacing信息
-    vol = sitk.ReadImage(img_path)
-    tmp = sitk.GetArrayFromImage(vol)
-    inputsize = vol.GetSize()
-    inputspacing = vol.GetSpacing()
-
-    transform = sitk.Transform()
-    transform.SetIdentity()
-    # 计算改变spacing后的size，用物理尺寸/体素的大小
-    outsize[0] = int(inputsize[0] * inputspacing[0] / outspacing[0] + 0.5)
-    outsize[1] = int(inputsize[1] * inputspacing[1] / outspacing[1] + 0.5)
-    outsize[2] = int(inputsize[2] * inputspacing[2] / outspacing[2] + 0.5)
-
-    # 设定重采样的一些参数
-    resampler = sitk.ResampleImageFilter()
-    resampler.SetTransform(transform)
-    resampler.SetInterpolator(sitk.sitkLinear)
-    resampler.SetOutputOrigin(vol.GetOrigin())
-    resampler.SetOutputSpacing(outspacing)
-    resampler.SetOutputDirection(vol.GetDirection())
-    resampler.SetSize(outsize)
-    newvol = resampler.Execute(vol)
-    return newvol
-
-with Pool(5) as p:
-    get_self_learning_data()

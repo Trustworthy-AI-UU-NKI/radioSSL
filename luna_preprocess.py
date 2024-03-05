@@ -1,18 +1,3 @@
-# coding: utf-8
-
-"""
-for subset in `seq 0 9`
-do
-python -W ignore infinite_generator_3D.py \
---fold $subset \
---scale 32 \
---data /mnt/dataset/shared/zongwei/LUNA16 \
---save generated_cubes
-done
-"""
-
-# In[1]:
-
 import warnings
 from skimage.transform import resize
 
@@ -23,6 +8,7 @@ os.environ['TF_CPP_MIN_LOG_LEVEL'] = '3'  # or any {'0', '1', '2'}
 
 import sys
 import random
+import csv
 
 import numpy as np
 import SimpleITK as sitk
@@ -41,11 +27,13 @@ parser.add_option("--input_cols", dest="input_cols", help="input cols", default=
 parser.add_option("--input_deps", dest="input_deps", help="input deps", default=32, type="int")
 parser.add_option("--crop_rows", dest="crop_rows", help="crop rows", default=64, type="int")
 parser.add_option("--crop_cols", dest="crop_cols", help="crop cols", default=64, type="int")
+parser.add_option("--lung_max", dest="lung_max", help="lung max", default=0.15, type="int")
 parser.add_option("--data", dest="data", help="the directory of LUNA16 dataset", default='/data1/luchixiang/LUNA16',
                   type="string")
 parser.add_option("--save", dest="save", help="the directory of processed 3D cubes",
                   default='/data1/luchixiang/LUNA16/shuffle2.5', type="string")
 parser.add_option("--scale", dest="scale", help="scale of the generator", default=16, type="int")
+parser.add_option('--z_align', action='store_true', dest='z_align', default=False, help='z dim align when cropping')
 parser.add_option('--seed', default=1, type="int")
 
 (options, args) = parser.parse_args()
@@ -84,6 +72,7 @@ class setup_config():
                  len_depth=None,
                  lung_min=0.7,
                  lung_max=1.0,
+                 z_align = False
                  ):
         self.input_rows = input_rows
         self.input_cols = input_cols
@@ -101,6 +90,7 @@ class setup_config():
         self.lung_min = lung_min
         self.lung_max = lung_max
         self.SAVE_DIR = SAVE_DIR
+        self.z_align = z_align
 
     def display(self):
         """Display Configuration values."""
@@ -121,36 +111,47 @@ config = setup_config(input_rows=options.input_rows,
                       len_border_z=15,
                       len_depth=3,
                       lung_min=0.7,
-                      lung_max=0.15,
+                      lung_max=options.lung_max,
                       DATA_DIR=options.data,
-                      SAVE_DIR=options.save
+                      SAVE_DIR=options.save,
+                      z_align=options.z_align
                       )
 config.display()
 
 col_size = [(96, 96, 64), (96, 96, 96), (112, 112, 64), (64, 64, 32)]
+col_size_z_align = [(96, 96, 32), (96, 96, 32), (112, 112, 32), (64, 64, 32)]  # If z_align then the slice dim must always be the same size 
 input_rows, input_cols, input_depth = (64, 64, 32)
 local_col_size = [(32, 32, 16), (16, 16, 16), (32, 32, 32), (8, 8, 8)]
 local_input_rows, local_input_cols, local_input_depth = (16, 16, 16)
 
 
 def infinite_generator_from_one_volume(img_array, save_dir, name):
+    
+    csv_lines = []
+    
     img_array[img_array < config.hu_min] = config.hu_min
     img_array[img_array > config.hu_max] = config.hu_max
     img_array = 1.0 * (img_array - config.hu_min) / (config.hu_max - config.hu_min)
     num_pair = 0
     while True:
-        crop_window1, crop_window2, local_windows = crop_pair(img_array)
+        crop_window1, crop_window2, local_windows, crop_coords1, crop_coords2 = crop_pair(img_array, z_align=config.z_align)
         crop_window = np.stack((crop_window1, crop_window2), axis=0)
         # crop_window = np.concatenate([crop_window, local_windows], axis=0)
         # print(crop_window.shape)
-        np.save(os.path.join(save_dir, name + '_global_' + str(num_pair) + '.npy'), crop_window)
-        np.save(os.path.join(save_dir, name + '_local_' + str(num_pair)  + '.npy'), local_windows)
+        global_path = os.path.join(save_dir, name + '_global_' + str(num_pair) + '.npy')
+        local_path = os.path.join(save_dir, name + '_local_' + str(num_pair)  + '.npy')
+        np.save(global_path, crop_window)
+        np.save(local_path, local_windows)
+        csv_lines.append([global_path,crop_coords1,crop_coords2])
         num_pair += 1
         if num_pair == config.scale:
             break
 
+    return csv_lines
 
-def crop_pair(img_array):
+
+def crop_pair(img_array, z_align = False):
+
     while True:
         size_x, size_y, size_z = img_array.shape
         # print(img_array.shape)
@@ -166,11 +167,15 @@ def crop_pair(img_array):
             padding = [0, 0, -pad + 1]
             img_array2 = np.pad(img_array2, padding, mode='constant', constant_values=0)
             size_z += -pad + 1
+        if z_align:
+            crop_size = col_size_z_align
+        else:
+            crop_size = col_size
         while True:
-            size_index1 = np.random.randint(0, len(col_size))
-            crop_rows1, crop_cols1, crop_deps1 = col_size[size_index1]
-            size_index2 = np.random.randint(0, len(col_size))
-            crop_rows2, crop_cols2, crop_deps2 = col_size[size_index2]
+            size_index1 = np.random.randint(0, len(crop_size))
+            crop_rows1, crop_cols1, crop_deps1 = crop_size[size_index1]
+            size_index2 = np.random.randint(0, len(crop_size))
+            crop_rows2, crop_cols2, crop_deps2 = crop_size[size_index2]
             if size_x - crop_rows1 - 1 - config.len_border <= config.len_border:
                 crop_rows1 -= 32
                 crop_cols1 -= 32
@@ -183,11 +188,14 @@ def crop_pair(img_array):
                                       size_z - crop_deps1 - config.len_depth - 1 - config.len_border_z)
             start_x2 = random.randint(0 + config.len_border, size_x - crop_rows2 - 1 - config.len_border)
             start_y2 = random.randint(0 + config.len_border, size_y - crop_cols2 - 1 - config.len_border)
-            start_z2 = random.randint(0 + config.len_border_z,
-                                      size_z - crop_deps2 - config.len_depth - 1 - config.len_border_z)
-            box1 = (start_x1, start_x1 + crop_rows1, start_y1, start_y1 + crop_cols1, start_z1, start_z1 + crop_deps1)
-            box2 = (start_x2, start_x2 + crop_rows2, start_y2, start_y2 + crop_cols2, start_z2, start_z2 + crop_deps2)
-            iou = cal_iou(box1, box2)
+            if z_align:  # If z_align, the crops must be on the same slices (because there is only 2D RoI align)
+                start_z2 = start_z1
+            else:
+                start_z2 = random.randint(0 + config.len_border_z,
+                                        size_z - crop_deps2 - config.len_depth - 1 - config.len_border_z)          
+            crop_coords1 = (start_x1, start_x1 + crop_rows1, start_y1, start_y1 + crop_cols1, start_z1, start_z1 + crop_deps1)
+            crop_coords2 = (start_x2, start_x2 + crop_rows2, start_y2, start_y2 + crop_cols2, start_z2, start_z2 + crop_deps2)
+            iou = cal_iou(crop_coords1, crop_coords2)
             # print(iou, start_x1, start_y1, start_z1, start_x2, start_y2, start_z2)
             if iou > 0.3:
                 break
@@ -274,11 +282,17 @@ def crop_pair(img_array):
                                   preserve_range=True,
                                   )
             local_windows.append(local_window)
-        return crop_window1[:, :, :input_depth], crop_window2[:, :, :input_depth], np.stack(local_windows, axis=0)
+
+
+        return crop_window1[:, :, :input_depth], crop_window2[:, :, :input_depth], np.stack(local_windows, axis=0), crop_coords1, crop_coords2
 
 
 def get_self_learning_data(fold):
     save_path = config.SAVE_DIR
+
+    csv_file = open(os.path.join(save_path,'crop_coords.csv'), 'w', newline='\n')
+    csv_writer = csv.writer(csv_file)
+
     for index_subset in fold:
         print(">> Fold {}".format(index_subset))
         luna_subset_path = os.path.join(config.DATA_DIR, "subset" + str(index_subset))
@@ -290,10 +304,14 @@ def get_self_learning_data(fold):
             img_array = load_sitk_with_resample(img_file)
             img_array = sitk.GetArrayFromImage(img_array)
             img_array = img_array.transpose(2, 1, 0)
-            # print(img_array.shape)
-            infinite_generator_from_one_volume(img_array, save_dir, img_name[:-4])
+            img_csv_rows = infinite_generator_from_one_volume(img_array, save_dir, img_name[:-4])
+            csv_rows += img_csv_rows
+            csv_writer.writerows(csv_rows)
+            csv_file.flush()
 
-
+    csv_file.close()
+        
+    
 def cal_iou(box1, box2):
     """
     :param box1: = [xmin1, ymin1, xmax1, ymax1]

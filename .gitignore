@@ -1,0 +1,6 @@
+.idea.
+.uuid
+.vscode
+__pycache__
+results
+runs

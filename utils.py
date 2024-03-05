@@ -58,7 +58,6 @@ def get_model(args, in_channels, n_class):
             # TODO: Gotta fix this by transfering and repeating the weights from the 2d model
         elif args.d == 2:
             model = PCRLv2(in_channels=in_channels, n_class=n_class, encoder_weights='imagenet', segmentation=True)
-    print(type(model))
     return model
 
 

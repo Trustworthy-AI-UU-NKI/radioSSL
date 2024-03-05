@@ -21,7 +21,7 @@ class Pcrlv2BraTSPretask(Dataset):
         self.global_transforms = global_transforms
         self.local_transforms = local_transforms
         self.norm = torchio.transforms.ZNormalization()
-        self.coords = pandas.read_csv(os.path.join(config.data),'crop_coords.csv', names=['path','crop1','crop2'], index_col='path')  # coordinates of each pair of crops
+        self.coords = pd.read_csv(os.path.join(config.data,'crop_coords.csv'), names=['path','crop1','crop2'], index_col='path')  # coordinates of each pair of crops
 
 
     def __len__(self):

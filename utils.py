@@ -7,6 +7,7 @@ import torch
 import random
 from PIL import ImageFilter
 import torch.nn.functional as F
+from torchvision import ops
 import segmentation_models_pytorch as smp
 from models import PCRLv23d, PCRLv2, SegmentationModel, UNet3D
 
@@ -30,34 +31,34 @@ def seed_worker(worker_id):  # This is for the workers of the dataloader that ne
 
 def get_model(args, in_channels, n_class):
     if args.model == 'scratch':
-        assert args.pretrained == 'none'
-        assert args.weight == None
+        if args.phase == 'finetune':
+            assert args.pretrained == 'none'
+            assert args.weight == None
         if args.d == 3:
             model = SegmentationModel(in_channels=in_channels, n_class=n_class, norm='gn', skip_conn=args.skip_conn)
         elif args.d == 2:
             model = PCRLv2(in_channels=in_channels, n_class=n_class, segmentation=True)
-    elif args.model == 'pcrlv2':
-        assert args.pretrained != 'none'
-        assert args.weight
+    elif args.model == 'pcrlv2' or args.model == 'cluster':
+        if args.phase == 'finetune':
+            assert args.pretrained != 'none'
+            assert args.weight
         if args.d == 3:
             model = SegmentationModel(in_channels=in_channels, n_class=n_class, norm='gn', skip_conn=args.skip_conn)
         elif args.d == 2:
             model = PCRLv2(in_channels=in_channels, n_class=n_class)
     elif args.model == 'genesis':
-        assert args.pretrained != 'none'
-        assert args.weight
+        assert args.d == 3
+        if args.phase == 'finetune':
+            assert args.pretrained != 'none'
+            assert args.weight
+        # TODO: Implement 2d too
         model = UNet3D(in_chann=in_channels, n_class=n_class)
     elif args.model == 'imagenet':
-        assert args.pretrained == 'encoder'
-        assert args.weight == None
-        if args.d == 3:
-            # Get weights from pretrained 2D model and tweak them for 3D model
-            model = SegmentationModel(in_channels=in_channels, n_class=n_class, norm='bn', skip_conn=args.skip_conn) # Note the switch from gn to bn
-            pretrained_model = PCRLv2(in_channels=in_channels, n_class=n_class, encoder_weights='imagenet', segmentation=True)
-
-            # TODO: Gotta fix this by transfering and repeating the weights from the 2d model
-        elif args.d == 2:
-            model = PCRLv2(in_channels=in_channels, n_class=n_class, encoder_weights='imagenet', segmentation=True)
+        assert args.d == 2
+        if args.phase == 'finetune':
+            assert args.pretrained == 'encoder'
+            assert args.weight == None
+        model = PCRLv2(in_channels=in_channels, n_class=n_class, encoder_weights='imagenet', segmentation=True)
     return model
 
 
@@ -126,7 +127,7 @@ def prepare_model(args, in_channels, n_class):
 
         elif args.finetune == 'decoder':  # Freeze encoder
             for name, param in model.named_parameters():
-                if all(layer not in name for layer in ['up_tr', 'out_tr', 'decoder', 'segmentation_head']):  # up_tr and out_tr for pcrlv2 and genesis, decoder and seg_head for imagenet
+                if all(layer not in name for layer in ['up_tr', 'out_tr', 'decoder', 'segmentation_head']):  # up_tr and out_tr for cluster/pcrlv2/genesis/scratch, decoder and seg_head for imagenet
                     param.requires_grad = False
 
         # Print parameters
@@ -456,6 +457,11 @@ def lits_dice_loss(input, target, train=True):
     return loss
 
 
+def swav_loss(gt1, gt2, out1, out2):
+    loss = - 0.5 * torch.mean(gt1 * torch.log(out2) + gt2 * torch.log(out1))
+    return loss
+
+
 def sinkhorn(args, Q: torch.Tensor, nmb_iters: int) -> torch.Tensor:
     with torch.no_grad():
         sum_Q = torch.sum(Q)
@@ -481,23 +487,55 @@ def sinkhorn(args, Q: torch.Tensor, nmb_iters: int) -> torch.Tensor:
         return (Q / torch.sum(Q, dim=0, keepdim=True)).t().float()
 
 
-def get_roi_align_coords(box1, box2):
-    
-    # Box dimensions
-    h1, w1 = box1.shape
-    h2, w2 = box2.shape
+def roi_align(pred1, pred2, box1, box2):
+    # Predicted cluster assignments to align: pred1, pred2
+    # Dimensions (H,W,Z) of input crop: crop_shape
+    # Coordinates of the crop bounding box : box1, box2 (ATTENTION AT THE ORDER OF DIMS! Box is [x1,x2,y1,y2,z1,z2])
 
-    # Calculate interesection of the two boxes
-    x1 = torch.max(box1[0], box2[0])
-    y1 = torch.max(box1[1], box2[1])
-    x2 = torch.min(box1[2], box2[2])
-    y2 = torch.min(box1[3], box2[3])
+    # Crop dimensions
+    H1 = box1[:,1] - box1[:,0]
+    W1 = box1[:,3] - box1[:,2]
+    H2 = box2[:,1] - box2[:,0]
+    W2 = box2[:,3] - box2[:,2]
 
-    # Intersecting box in relation to bbox 1
+    # Patched crop dimensions: (num patches in height) x (num patches in width) x (num patches in depth)
+    B, C, NPH, NPW, NPD = pred1.shape
+
+    # Calculate interesection box of the two bounding boxes
+    x1 = torch.maximum(box1[:,0], box2[:,0])
+    y1 = torch.maximum(box1[:,2], box2[:,2])
+    x2 = torch.minimum(box1[:,1], box2[:,1])
+    y2 = torch.minimum(box1[:,3], box2[:,3])
+
+    # Coordinates of intersecting box inside bbox 1 (percentage coordinates)
     # z-dim is ommited because the intersection is the same at z-axis (already aligned)
-    ibox1 = ((x1-box1[0])/h1, (y1-box1[1])/w1, (x2-box1[0])/h1, (y2-box1[1])/w1)  
+    ibox1 = torch.stack([(x1-box1[:,0])/H1, (y1-box1[:,2])/W1, (x2-box1[:,0])/H1, (y2-box1[:,2])/W1]).T
 
-    # Intersecting box in relation to bbox 2
-    ibox2 = ((x1-box2[0])/h2, (y1-box2[1])/w2, (x2-box2[0])/h2, (y2-box2[0])/w2)
+    # Coordinates of intersecting box inside bbox 2 (percentage coordinates)
+    ibox2 = torch.stack([(x1-box2[:,0])/H2, (y1-box2[:,2])/W2, (x2-box2[:,0])/H2, (y2-box2[:,2])/W2]).T
 
-    return ibox1, ibox2
+    # Convert percentage coordinates to coordinates in patched crop
+    for i, NP in enumerate([NPH,NPW,NPH,NPW]):
+        ibox1[:,i] = ibox1[:,i]*NP
+        ibox2[:,i] = ibox1[:,i]*NP
+
+    # Repeat the same alignment for every slice
+    align1 = ibox1.unsqueeze(1).repeat(1,NPD,1)
+    align2 = ibox2.unsqueeze(1).repeat(1,NPD,1)
+
+    # Preprocess alignments for roi_align
+    align1 = align1.reshape(B*NPD,4) # Flatten batch and slice dimension
+    align2 = align2.reshape(B*NPD,4)
+    align1 = torch.cat((align1,torch.arange(0,B).repeat_interleave(NPD).unsqueeze(1)),dim=1)  # Add batch index column
+    align2 = torch.cat((align2,torch.arange(0,B).repeat_interleave(NPD).unsqueeze(1)),dim=1) 
+
+    # Flatten batch and slice dimension of predictions
+    pred1 = pred1.permute(0,4,1,2,3).reshape(B*NPD,1,NPH,NPW).float()
+    pred2 = pred2.permute(0,4,1,2,3).reshape(B*NPD,1,NPH,NPW).float()
+
+    # ROI-align and restore original dimensions
+    pred1_align = ops.roi_align(pred1, boxes=align1, output_size=(NPH, NPW)).reshape(B, NPD, 1, NPH, NPW).permute(0,2,3,4,1)
+    pred2_align = ops.roi_align(pred2, boxes=align1, output_size=(NPH, NPW)).reshape(B, NPD, 1, NPH, NPW).permute(0,2,3,4,1)
+
+    # return ibox1, ibox2
+    return 0

@@ -118,14 +118,13 @@ class PCRLv23d(nn.Module):
         self.sigmoid = nn.Sigmoid()
         self.skip_conn=skip_conn
 
-        # Clustering Pretask Heads:
-        patch_dim = (8,8,4)  # P1 x P2 x P3
-        patch_num = 512  # N
-        emb_dim = 64  # D
-        proto_num = 10  # K
-        # Projection head
-        self.cluster_projection_head = nn.Linear(patch_dim[0]*patch_dim[1]*patch_dim[2], emb_dim)
-        self.prototypes = nn.Linear(emb_dim, proto_num, bias=False)
+        # Clustering Pretask Head
+        self.patch_dim = (8,8,4)  # P1 x P2 x P3
+        self.patch_num = 512  # N  # Does nothing, just useful info
+        self.emb_dim = 64  # D
+        self.proto_num = 10  # K
+        self.cluster_projection_head = nn.Linear(self.patch_dim[0]*self.patch_dim[1]*self.patch_dim[2], self.emb_dim)  # Projection head
+        self.prototypes = nn.Linear(self.emb_dim, self.proto_num, bias=False)
 
     def forward_cluster_head(self, x):
         emb = self.cluster_projection_head(x)

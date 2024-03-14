@@ -6,6 +6,7 @@ import torch
 import torch.nn as nn
 import torch.nn.functional as f
 import random
+from copy import deepcopy
 
 from utils import prepare_model, get_loss, dice_coeff
 from torch.utils.tensorboard import SummaryWriter
@@ -120,7 +121,7 @@ def train_segmentation(args, dataloader, in_channels, n_classes, run_dir, writer
 
     # Loss
     criterion = get_loss(args.n)
-
+ 
     # Optimizer
     if args.model == 'genesis':
         optimizer = torch.optim.SGD(model.parameters(), args.lr, momentum=args.momentum, weight_decay=args.weight_decay, nesterov=False)
@@ -176,6 +177,7 @@ def train_segmentation(args, dataloader, in_channels, n_classes, run_dir, writer
                       .format(epoch + 1, args.epochs, iteration + 1, loss.item(), np.average(train_losses)))
                 sys.stdout.flush()
 
+            # Plot predictions on tensorboard
             b_idx = 0
             if args.vis and iteration==b_idx and epoch % 5 == 0:
                 mod_idx = 0
@@ -183,9 +185,9 @@ def train_segmentation(args, dataloader, in_channels, n_classes, run_dir, writer
                 img_idx = 0
                 slc_idx = image.shape[3] // 2
 
-                raw_img = image[b_idx,mod_idx,:,slc_idx,:].cpu().detach().numpy()
-                gt_img = gt[b_idx,:,:,slc_idx,:].cpu().detach().numpy()
-                pred_img = pred[b_idx,:,:,slc_idx,:].cpu().detach().numpy()
+                raw_img = image[img_idx,mod_idx,:,slc_idx,:].cpu().detach().numpy()
+                gt_img = gt[img_idx,:,:,slc_idx,:].cpu().detach().numpy()
+                pred_img = pred[img_idx,:,:,slc_idx,:].cpu().detach().numpy()
 
                 raw_img_name = f'b{b_idx}_img{img_idx}_slc{slc_idx}_raw'
                 gt_img_name = f'b{b_idx}_img{img_idx}_slc{slc_idx}_gt'
@@ -239,10 +241,11 @@ def train_segmentation(args, dataloader, in_channels, n_classes, run_dir, writer
             num_epoch_no_improvement = 0
             torch.save({
                 'epoch': epoch + 1,
-                'state_dict': model.module.state_dict(),  # only save encoder
+                'state_dict': model.module.state_dict(),
                 'optimizer_state_dict': optimizer.state_dict()
             }, run_dir + ".pt")
             print("Saving model ", run_dir + ".pt")
+            model_final = deepcopy(model)  # Return only best version of model at the end of the function
         else:
             print("Validation loss does not decrease from {:.4f}, num_epoch_no_improvement {}".format(best_loss,
                                                                                                       num_epoch_no_improvement))
@@ -261,7 +264,7 @@ def train_segmentation(args, dataloader, in_channels, n_classes, run_dir, writer
 
         sys.stdout.flush()
 
-    return model, writer
+    return model_final, writer
 
 
 def test_segmentation(args, dataloader, in_channels, n_classes, finetuned_model=None, writer=None):
@@ -333,7 +336,7 @@ def test_segmentation(args, dataloader, in_channels, n_classes, finetuned_model=
 
         # logging
         avg_test_loss = np.average(test_loss_arr)
-        avg_test_dice = np.average(test_dice_arr)  # average across batches
+        avg_test_dice = np.average(test_dice_arr) 
         if args.n == 'brats':
             avg_test_dice_wt = np.average(test_dice_wt_arr)
             avg_test_dice_tc = np.average(test_dice_tc_arr)

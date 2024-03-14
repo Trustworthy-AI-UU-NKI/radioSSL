@@ -11,13 +11,13 @@ import math
 import torch
 import torch.backends.cudnn as cudnn
 import torch.nn as nn
+import torch.nn.functional as f
 import random
-from utils import adjust_learning_rate, AverageMeter, sinkhorn
+from utils import adjust_learning_rate, AverageMeter, sinkhorn, swav_loss, roi_align
 from torch.utils.tensorboard import SummaryWriter
-from torchvision.ops import roi_align
 
+import seaborn as sns
 from matplotlib import pyplot as plt
-
 
 from models import PCRLv23d, TraceWrapper
 
@@ -26,8 +26,6 @@ try:
 except ImportError:
     pass
 
-
-# from koila import LazyTensor, lazy
 
 def Normalize(x):
     norm_x = x.pow(2).sum(1, keepdim=True).pow(1. / 2.)
@@ -43,6 +41,10 @@ def moment_update(model, model_ema, m):
 
 def train_pcrlv2_3d(args, data_loader, out_channel=3):
 
+    # Generate colors for cluster masks (make 10 of them, but later TODO: base it on cluster number K)
+    palette = sns.color_palette()
+    colors = torch.Tensor([list(color) for color in palette])
+
     torch.backends.cudnn.deterministic = True
 
     curr_time = str(time.time()).replace(".","")
@@ -55,9 +57,9 @@ def train_pcrlv2_3d(args, data_loader, out_channel=3):
             os.makedirs(args.output)
         writer = SummaryWriter(os.path.join(args.output, run_name))
 
-
     train_loader = data_loader['train']
-    # create model and optimizer
+
+    # Create model and optimizer
     model = PCRLv23d(skip_conn=args.skip_conn)
     if not args.cpu:
         model = model.cuda()
@@ -86,16 +88,15 @@ def train_pcrlv2_3d(args, data_loader, out_channel=3):
 
         time1 = time.time()
 
-        loss, prob, total_loss, writer = train_pcrlv2_inner(args, epoch, train_loader, model, optimizer, criterion, cosine, writer)
+        loss, prob, total_loss, writer = train_pcrlv2_inner(args, epoch, train_loader, model, optimizer, criterion, cosine, writer, colors)
         time2 = time.time()
         print('epoch {}, total time {:.2f}'.format(epoch, time2 - time1))
 
         if args.tensorboard:
             writer.add_scalar('loss/train', total_loss, epoch)  # Write train loss on tensorboard
 
-        # save model
+        # Save model
         if epoch % 100 == 0 or epoch == 240:
-            # saving the model
             print('==> Saving...')
             state = {'opt': args, 'state_dict': model.module.state_dict(),
                      'optimizer': optimizer.state_dict(), 'epoch': epoch}
@@ -103,7 +104,7 @@ def train_pcrlv2_3d(args, data_loader, out_channel=3):
             save_file = os.path.join(args.output, run_name + '.pt')
             torch.save(state, save_file)
 
-            # help release GPU memory
+            # Help release GPU memory
             del state
         if not args.cpu:
             torch.cuda.empty_cache()
@@ -118,7 +119,7 @@ def cos_loss(cosine, output1, output2):
     return loss, index
 
 
-def train_pcrlv2_inner(args, epoch, train_loader, model, optimizer, criterion, cosine, writer):
+def train_pcrlv2_inner(args, epoch, train_loader, model, optimizer, criterion, cosine, writer, colors):
     """
     one epoch training for instance discrimination
     """
@@ -133,7 +134,9 @@ def train_pcrlv2_inner(args, epoch, train_loader, model, optimizer, criterion, c
     total_loss_meter = AverageMeter()
 
     end = time.time()
-    for idx, (input1, input2, gt, gt2, local_views) in enumerate(train_loader):
+    for idx, (input1, input2, gt, gt2, crop1_coords, crop2_coords, local_views) in enumerate(train_loader):
+
+        B, C, H, W, D = input1.shape
 
         data_time.update(time.time() - end)
 
@@ -148,7 +151,7 @@ def train_pcrlv2_inner(args, epoch, train_loader, model, optimizer, criterion, c
 
         mask1, decoder_outputs1, middle_masks1, encoder_output1 = model(x1)
 
-        if args.phase == 'pretask':
+        if args.model == 'pcrlv2':
             mask2, decoder_outputs2, _, encoder_output2 = model(x2)
             loss2, index2 = cos_loss(cosine, decoder_outputs1, decoder_outputs2)
             local_loss = 0.0
@@ -164,51 +167,52 @@ def train_pcrlv2_inner(args, epoch, train_loader, model, optimizer, criterion, c
             local_loss = local_loss / (2 * len(local_views))
             loss1 = criterion(mask1, gt)
             beta = 0.5 * (1. + math.cos(math.pi * epoch / 240))
-            loss4 = beta * criterion(middle_masks1[index2], gt)
+            loss4 = beta * criterion(middle_masks1[index2], gt)  
             loss = loss1 + loss2 + loss4 + local_loss
 
-        elif args.phase == 'cluster_pretask':
-            _, _, _, encoder_output2 = model(gt)  #TODO: in the future make the encoder_output2 come from the second crop
+        elif args.model == 'cluster':
+            # x2 = gt  #TODO: in the future make the encoder_output2 come from the second crop
+            _, _, _, encoder_output2 = model(x2) 
 
-            ## SwAV Algorithm
+            ## SwAV Loss
 
             # Flatten spatial dims of feature map
-            # B, N, P1, P2, P3 = encoder_output1.shape[2:] TODO: save the spatial dims and give the following P1,P2 different names
-            P1 = torch.prod(torch.tensor(encoder_output1.shape[2:], dtype=int)).item()
-            P2 = torch.prod(torch.tensor(encoder_output2.shape[2:], dtype=int)).item()
-            encoder_output1 = encoder_output1.reshape(encoder_output1.shape[0], encoder_output1.shape[1], P1)
-            encoder_output2 = encoder_output2.reshape(encoder_output2.shape[0], encoder_output2.shape[1], P2)
+            B, N, PH, PW, PD = encoder_output1.shape  # Batch, Number of patches, Patch spatial dims
+            encoder_output1 = encoder_output1.reshape(B, N, PH*PW*PD)
+            encoder_output2 = encoder_output2.reshape(B, N, PH*PW*PD)
 
             # Get embeddings and outputs and normalize embeddings
             emb1, out1 = model.module.forward_cluster_head(encoder_output1)
             emb2, out2 = model.module.forward_cluster_head(encoder_output2)
-            emb1 = nn.functional.normalize(emb1, dim=2, p=2)  # Normalize D dimension (BxNxD)
-            emb2 = nn.functional.normalize(emb2, dim=2, p=2)  # Normalize D dimension (BxNxD)
+            
+            # Normalize D dimension (BxNxD)
+            emb1 = nn.functional.normalize(emb1, dim=2, p=2)  
+            emb2 = nn.functional.normalize(emb2, dim=2, p=2) 
 
-            # Get prototypes and normalize
+            # Get ground truths
             with torch.no_grad():
+                # Get prototypes and normalize
                 proto = model.module.prototypes.weight.data.clone()
                 proto = nn.functional.normalize(proto, dim=1, p=2)  # Normalize D dimension (KxD)
 
-            # Embedding to prototype similarity matrix
-            cos_sim1 = torch.matmul(emb1, proto.t())  # BxNxK
-            cos_sim2 = torch.matmul(emb2, proto.t())
+                # Embedding to prototype similarity matrix
+                cos_sim1 = torch.matmul(emb1, proto.t())  # BxNxK
+                cos_sim2 = torch.matmul(emb2, proto.t())
 
-            B, N, K = cos_sim1.shape
+                B, N, K = cos_sim1.shape
 
-            # Flatten batch and patch dimensions of similarity matrices (BxNxK -> B*NxK), and transpose matrices (KxB*N) for sinkhorn algorithm
-            flat_cos_sim1 = cos_sim1.reshape(K, B*N)
-            flat_cos_sim2 = cos_sim2.reshape(K, B*N)
+                # Flatten batch and patch num dimensions of similarity matrices (BxNxK -> B*NxK), and transpose matrices (KxB*N) for sinkhorn algorithm
+                flat_cos_sim1 = cos_sim1.reshape(B*N,K).T
+                flat_cos_sim2 = cos_sim2.reshape(B*N,K).T
 
-            # Standardize for numerical stability (maybe?)
-            eps = 0.05
-            flat_cos_sim1 = torch.exp(flat_cos_sim1 / eps)
-            flat_cos_sim2 = torch.exp(flat_cos_sim2 / eps)
+                # Standardize for numerical stability (maybe?)
+                eps = 0.05
+                flat_cos_sim1 = torch.exp(flat_cos_sim1 / eps)
+                flat_cos_sim2 = torch.exp(flat_cos_sim2 / eps)
 
-            with torch.no_grad():
                 # Teacher cluster assignments
-                gt1 = sinkhorn(args, Q=flat_cos_sim1, nmb_iters=3).reshape((B,N,K))
-                gt2 = sinkhorn(args, Q=flat_cos_sim2, nmb_iters=3).reshape((B,N,K))
+                gt1 = sinkhorn(args, Q=flat_cos_sim1, nmb_iters=3).T.reshape((B,N,K))  # Also restore patch num dimension
+                gt2 = sinkhorn(args, Q=flat_cos_sim2, nmb_iters=3).T.reshape((B,N,K))
 
                 # Apply temperature
                 temp = 1
@@ -216,41 +220,107 @@ def train_pcrlv2_inner(args, epoch, train_loader, model, optimizer, criterion, c
                 gt2 = gt2 / temp
 
             # Convert to probabilities
-            prob_gt1 = gt1.softmax(2)
-            prob_gt2 = gt2.softmax(2)
+            # prob_gt1 = gt1.softmax(2)  # TODO: Have to check if this is already a probability
+            # prob_gt2 = gt2.softmax(2)
             prob1 = out1.softmax(2)
             prob2 = out2.softmax(2)
 
-            # Plot cluster assignments
+            # Convert prediction and groudn truth to cluster masks (restore spatial position of patched image)
+            NPH = H//PH  # Number of patches at X dimension
+            NPW = W//PW  # Number of patches at Y dimension
+            NPD = D//PD  # Number of patches at Z dimension
+            pred1 = prob1.argmax(dim=2).reshape((B,1,NPH,NPW,NPD))  # TODO: Later, remove argmax and use soft clusters
+            pred2 = prob2.argmax(dim=2).reshape((B,1,NPH,NPW,NPD))
+            gt1 = gt1.argmax(dim=2).reshape((B,1,NPH,NPW,NPD))
+            gt2 = gt2.argmax(dim=2).reshape((B,1,NPH,NPW,NPD))
 
-            # cluster1 = prob1.reshape((B,int(torch.sqrt(N)),int(torch.))).argmax(dim=3)  # TODO: define cluster1 and cluster2
-            # TODO: implement cluster output saving for monitoring
-            # if idx == 0:
-            #    img_id = 0
-            #    slice_id = 0
-            #    plt.imshow(x1[img_id,:,:,slice_id].detach().cpu().numpy())
-            #    plt.save(os.path.join(writer_log_dir, f'b{idx}_img{img_id}_e{epoch}_raw.png'))
+            # ROI-align
+            #TODO: i temporarily put the inputs to actually see if the alignment is ok
+            crop1_roi_coords, crop2_roi_coords = roi_align(input1, input2, crop1_coords, crop2_coords)
 
-            #    cluster1 = torch.argmax(prob1, axis=2).reshape((B, int(N / 2), int(N / 2)))
-            #    plt.imshow(cluster1[img_id,:,:,slice_id].detach().cpu().numpy())
-            #    plt.save(os.path.join(writer_log_dir, f'b{idx}_img{img_id}_e{epoch}_cluster1.png'))
-
-            #    cluster2 = torch.argmax(prob2, axis=2).reshape((B, int(N / 2), int(N / 2)))
-            #    plt.imshow(cluster2[img_id,:,:,slice_id].detach().cpu().numpy())
-            #    plt.save(os.path.join(writer_log_dir, f'b{idx}_img{img_id}_e{epoch}_cluster2.png'))
-
-            loss1 = swav_loss(prob_gt1, prob_gt2, prob1, prob2)  # TODO: In the future, use encoder_output_2 and roi align the clusters
+            # Loss
+            loss1 = swav_loss(gt1, gt2, prob1, prob2)  # TODO: In the future, use encoder_output_2 and roi align the clusters
             # TODO: add the other losses later
             loss2 = torch.tensor(0)
             loss4 = 0
             local_loss = 0
 
-        if args.phase == 'pretask':
+            # Plot predictions on tensorboard
+            b_idx = 0
+            if args.vis and idx==b_idx and epoch % 10 == 0:
+
+                # Select 2D images
+                img_idx = 0
+                m_idx = 0
+                c_idx = 0
+                in1 = x1[img_idx,m_idx,:,:,input1.size(-1)//2].unsqueeze(0)
+                in2 = x2[img_idx,m_idx,:,:,input2.size(-1)//2].unsqueeze(0)
+                pred1 = pred1[img_idx,:,:,:,pred1.size(-1)//2]
+                pred2 = pred2[img_idx,:,:,:,pred2.size(-1)//2]
+                gt1 = gt1[img_idx,:,:,:,gt1.size(-1)//2]
+                gt2 = gt2[img_idx,:,:,:,gt2.size(-1)//2]
+
+                # Min-max norm input images
+                in1 = (in1 - in1.min())/(in1.max() - in1.min())
+                in2 = (in2 - in2.min())/(in2.max() - in2.min())
+
+                # Interpolate cluster masks to original input shape
+                pred1 = f.interpolate(pred1.float().unsqueeze(0), size=(H,W)).squeeze(0)
+                pred2 = f.interpolate(pred2.float().unsqueeze(0), size=(H,W)).squeeze(0)
+                gt1 = f.interpolate(gt1.float().unsqueeze(0), size=(H,W)).squeeze(0)
+                gt2 = f.interpolate(gt2.float().unsqueeze(0), size=(H,W)).squeeze(0)
+
+                # Send to cpu
+                in1 = in1.cpu().detach()
+                in2 = in2.cpu().detach()
+                pred1 = pred1.cpu().detach()
+                pred2 = pred2.cpu().detach()
+                gt1 = gt1.cpu().detach()
+                gt2 = gt2.cpu().detach()
+
+                # Give color to each cluster in cluster masks
+                pred1 = pred1.repeat((3,1,1)).permute(1,2,0)
+                pred2 = pred2.repeat((3,1,1)).permute(1,2,0)
+                gt1 = gt1.repeat((3,1,1)).permute(1,2,0)
+                gt2 = gt2.repeat((3,1,1)).permute(1,2,0)
+                for i in range(colors.shape[0]):
+                    pred1[pred1[:,:,0] == i] = colors[i]
+                    pred2[pred2[:,:,0] == i] = colors[i]
+                    gt1[gt1[:,:,0] == i] = colors[i]
+                    gt2[gt2[:,:,0] == i] = colors[i]
+                pred1 = pred1.permute(2,1,0)
+                pred2 = pred2.permute(2,1,0)
+                gt1 = gt1.permute(2,1,0)
+                gt2 = gt2.permute(2,1,0)
+
+                # Pad images for better visualization                
+                in1 = f.pad(in1.unsqueeze(0),(2,1,2,2),value=1)
+                in2 = f.pad(in2.unsqueeze(0),(1,2,2,2),value=1)
+                pred1 = f.pad(pred1.unsqueeze(0),(2,1,2,2),value=1)
+                pred2 = f.pad(pred2.unsqueeze(0),(1,2,2,2),value=1)
+                gt1 = f.pad(gt1.unsqueeze(0),(2,1,2,2),value=1)
+                gt2 = f.pad(gt2.unsqueeze(0),(1,2,2,2),value=1)
+
+                # Combine crops and save in tensorboard
+                in_img = torch.cat((in1,in2),dim=3).squeeze(0).cpu().detach().numpy()
+                pred_img = torch.cat((pred1,pred2),dim=3).squeeze(0).cpu().detach().numpy()
+                gt_img = torch.cat((gt1,gt2),dim=3).squeeze(0).cpu().detach().numpy()
+
+                in_img_name = 'img/raw' # f'b{b_idx}_img{img_idx}_slc{slc_idx}_raw'
+                pred_img_name = 'img/pred' # f'b{b_idx}_img{img_idx}_slc{slc_idx}_pred'
+                gt_img_name = 'img/gt' # f'b{b_idx}_img{img_idx}_slc{slc_idx}_gt'
+
+                writer.add_image(in_img_name, img_tensor=in_img, global_step=epoch, dataformats='CHW')
+                writer.add_image(pred_img_name, img_tensor=pred_img, global_step=epoch, dataformats='CHW')   
+                writer.add_image(gt_img_name, img_tensor=gt_img, global_step=epoch, dataformats='CHW')
+
+        # Total Loss
+        if args.model == 'pcrlv2':
             loss = loss1 + loss2 + loss4 + local_loss
-        if args.phase == 'cluster_pretask':  # TODO: add the other losses later
+        if args.model == 'cluster':  # TODO: add the other losses later
             loss = loss1 
 
-        # ===================backward=====================
+        # Backward
         if loss > 1000 and epoch > 10:
             print('skip the step')
             continue
@@ -264,7 +334,7 @@ def train_pcrlv2_inner(args, epoch, train_loader, model, optimizer, criterion, c
         # torch.nn.utils.clip_grad_norm_(model.parameters(), clip_value)
         optimizer.step()
 
-        # ===================meters=====================
+        # Meters
         mg_loss_meter.update(loss1.item(), bsz)
         loss_meter.update(loss2.item(), bsz)
         prob_meter.update(local_loss, bsz)
@@ -292,7 +362,3 @@ def train_pcrlv2_inner(args, epoch, train_loader, model, optimizer, criterion, c
             sys.stdout.flush()
 
     return mg_loss_meter.avg, prob_meter.avg, total_loss_meter.avg, writer
-
-def swav_loss(gt1, gt2, out1, out2):
-    loss = - 0.5 * torch.mean(gt1 * torch.log(out2) + gt2 * torch.log(out1))
-    return loss

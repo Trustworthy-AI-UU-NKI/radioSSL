@@ -11,14 +11,15 @@ from data import DataGenerator, get_dataloader
 from utils import set_seed
 from finetune import train_chest_classification, train_brats_segmentation, test_brats_segmentation, train_lits_segmentation, test_lits_segmentation
 
+
 warnings.filterwarnings('ignore')
 
 if __name__ == '__main__':
     parser = argparse.ArgumentParser(description='Self Training benchmark')
-    parser.add_argument('--data', metavar='DIR', default='/data1/luchixiang/LUNA16/processed',
+    parser.add_argument('--data', metavar='DIR', default='/home/igogou/data/LUNA16',
                         help='path to dataset')
-    parser.add_argument('--model', metavar='MODEL', default='pcrlv2', help='choose the model')
-    parser.add_argument('--phase', default='pretask', choices=['pretask', 'cluster_pretask', 'finetune', 'scratch', 'test'], type=str, help='pretask or finetune or scratch or test')
+    parser.add_argument('--model', metavar='MODEL', default='pcrlv2', choices=['cluster','pcrlv2','genesis','imagenet','scratch'], help='choose the model')
+    parser.add_argument('--phase', default='pretask', choices=['pretask', 'finetune', 'test'], type=str, help='pretask or finetune or test')
     parser.add_argument('--pretrained', default='encoder', choices=['all', 'encoder', 'none'], type=str, help='all or encoder or none')
     parser.add_argument('--finetune', default='all', choices=['all', 'decoder', 'last'], type=str, help='all or decoder or last')
     parser.add_argument('--b', default=16, type=int, help='batch size')
@@ -62,6 +63,11 @@ if __name__ == '__main__':
         assert args.weight is None
         if args.model != 'imagenet':  # Because with imagenet pretrained model, we don't load the weights from a file (weight=None) but we do use pretrained weights
             assert args.pretrained == 'none'
+    # Define which models can be pretrained or finetuned
+    if args.phase in ['finetune','test']:
+        assert args.model in ['cluster', 'pcrlv2', 'genesis', 'imagenet', 'scratch']
+    elif args.phase == 'pretask':
+        assert args.model in ['cluster', 'pcrlv2']
 
     # Create logger
     curr_time = str(time.time()).replace(".", "")
@@ -86,13 +92,13 @@ if __name__ == '__main__':
             # Pretrain types that don't use weights
             elif not args.weight:
                 if args.model == 'imagenet':
-                    pretrain_type = f'imagenet_{args.d}d_pretrain'
+                    pretrain_type = f'imagenet_pretrain'
                 elif args.model == 'scratch' or args.pretrained == 'none':
                     pretrain_type = f'scratch_{args.d}d'
             folder_name =  args.n + '_finetune' + '_' + pretrain_type
         
         elif args.phase == 'pretask':
-            folder_name = f'{args.n}_{args.d}d_pretrain'
+            folder_name = f'{args.n}_pretrain'
         
         if not os.path.exists(os.path.join(args.output,folder_name)):
             os.makedirs(os.path.join(args.output,folder_name))
@@ -114,9 +120,13 @@ if __name__ == '__main__':
     if args.model == 'pcrlv2' and args.phase == 'pretask' and args.d == 2:
         train_pcrlv2(args, data_loader)
     
-    # 3D PCRLv2 pretask (w/ or w/o Clustering) 
-    elif args.model == 'pcrlv2' and (args.phase == 'pretask' or args.phase == 'cluster_pretask') and args.d == 3:
+    # 3D PCRLv2 pretask
+    elif args.model == 'pcrlv2' and args.phase == 'pretask' and args.d == 3:
         train_pcrlv2_3d(args, data_loader)
+
+    # 3D Clustering pretask 
+    elif args.model == 'cluster' and args.phase == 'pretask' and args.d == 3:
+        train_pcrlv2_3d(args, data_loader)  # TODO: Maybe give its own function later
 
     # # Finetuning on Chest
     # elif args.model == 'pcrlv2' and args.phase == 'finetune' and args.n == 'chest':
@@ -138,7 +148,7 @@ if __name__ == '__main__':
         writer = test_lits_segmentation(args, data_loader, finetuned_model=model, writer=writer)
 
     # Testing on LiTS
-    elif args.model in ['pcrlv2','genesis','imagenet'] and args.phase == 'test' and args.n == 'lits':
+    elif args.phase == 'test' and args.n == 'lits':
         assert args.d == 3
         test_lits_segmentation(args, data_loader, writer=writer)
     

@@ -11,13 +11,16 @@ import numpy
 
 def get_dataloader(args):
     generator = DataGenerator(args)
+    # Phase corrections
     if args.phase == 'test':
         phase = 'finetune'  # Because finetune and test use the same dataloader
-    elif args.phase == 'cluster_pretask':
-        phase = 'pretask'
     else:
         phase = args.phase
-    model = 'pcrlv2'  # Because both genesis and pcrlv2 use the same dataloader
+    # Model corrections
+    if args.model in ['genesis', 'imagenet', 'scratch', 'cluster'] and phase == 'finetune':  # Attention: phase and not args.phase
+        model = 'pcrlv2'  # Because those models and pcrlv2 use the same dataloader during finetuning (cluster has its own during pretraining)
+    else:
+        model = args.model
     loader_name = model + '_' + args.n + '_' + phase
     dataloader = getattr(generator, loader_name)()
     return dataloader
@@ -131,12 +134,12 @@ class DataGenerator:
                               torchio.transforms.RandomAffine(),
                               ]
         spatial_transforms = torchio.transforms.Compose(spatial_transforms)
-        transforms = [torchio.transforms.RandomBlur(),
+        local_transforms = [torchio.transforms.RandomBlur(),
                       torchio.transforms.RandomNoise(),
                       torchio.transforms.RandomGamma(),
                       torchio.transforms.ZNormalization()
                       ]
-        local_transforms = torchio.transforms.Compose(transforms)
+        local_transforms = torchio.transforms.Compose(local_transforms)
         global_transforms = [torchio.transforms.RandomBlur(),
                              torchio.transforms.RandomNoise(),
                              torchio.transforms.RandomGamma(),
@@ -158,6 +161,38 @@ class DataGenerator:
                                         pin_memory=True, shuffle=False, num_workers=args.workers, worker_init_fn=seed_worker, generator=generator)
         return dataloader
 
+    def cluster_brats_pretask(self):
+        print('using the reverse_aug pretrain on brats')
+        args = self.args
+        dataloader = {}
+        # train_fold = [0, 1, 2, 3, 4, 5, 6]
+        # valid_fold = [7, 8, 9]
+        x_train, x_valid, _ = get_brats_pretrain_list(self.args.data, self.args.ratio, suffix='_global_')
+        print(f'Train Images {len(x_train)}, Valid Images {len(x_valid)}')
+        spatial_transforms = []  # Removed Flip and Affine transform (TODO: Maybe put them back if it doesnt affect mask alignment)
+        spatial_transforms = torchio.transforms.Compose(spatial_transforms)
+        local_transforms = [torchio.transforms.RandomNoise(std=0.01), # Removed destructive transforms (TODO: Maybe put them back once we know it works)
+                        torchio.transforms.ZNormalization()
+                        ]  
+        local_transforms = torchio.transforms.Compose(local_transforms)
+        global_transforms = [torchio.transforms.RandomNoise(std=0.01), # Removed destructive transforms (TODO: Maybe put them back once we know it works)
+                        torchio.transforms.ZNormalization()
+                        ]  
+        global_transforms = torchio.transforms.Compose(global_transforms)
+
+        train_ds = Pcrlv2BraTSPretask(args, x_train, train=True, transform=spatial_transforms,
+                                     global_transforms=global_transforms, local_transforms=local_transforms)
+        valid_ds = Pcrlv2BraTSPretask(args, x_valid, train=False)
+
+        generator = torch.Generator()
+        generator.manual_seed(args.seed)
+
+        dataloader['train'] = DataLoader(train_ds, batch_size=args.b,
+                                         pin_memory=True, shuffle=True, num_workers=args.workers, worker_init_fn=seed_worker, generator=generator)
+        dataloader['eval'] = DataLoader(valid_ds, batch_size=args.b,
+                                        pin_memory=True, shuffle=False, num_workers=args.workers, worker_init_fn=seed_worker, generator=generator)
+        return dataloader
+        
     def pcrlv2_chest_finetune(self):
         args = self.args
         train_file = './train_val_txt/chest_train.txt'

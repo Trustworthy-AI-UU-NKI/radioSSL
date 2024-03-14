@@ -228,7 +228,6 @@ def crop_pair(img_array, z_align = False):
             crop_coords1 = (start_x1, start_x1 + crop_rows1, start_y1, start_y1 + crop_cols1, start_z1, start_z1 + crop_deps1)
             crop_coords2 = (start_x2, start_x2 + crop_rows2, start_y2, start_y2 + crop_cols2, start_z2, start_z2 + crop_deps2)
             iou = cal_iou(crop_coords1, crop_coords2)
-            # print(iou, start_x1, start_y1, start_z1, start_x2, start_y2, start_z2)
             if iou > 0.3:
                 break
 
@@ -315,32 +314,13 @@ def crop_pair(img_array, z_align = False):
                                   )
             local_windows.append(local_window)
 
-        # ibox1 = ()
-        # ibox2 = ()
-        
-        # if z_align:
-        # # Save the coordinates of the intersecting box (ibox) with relation to bbox 1 and bbox2
-            
-        #     # Intersecting box in relation to bbox 1
-        #     x1 = torch.max(box1[0], box2[0]) - box1[0] / crop_rows1
-        #     y1 = torch.max(box1[1], box2[1]) - box1[1] / crop_cols1
-        #     x2 = torch.min(box1[2], box2[2]) - box1[0] / crop_rows1
-        #     y2 = torch.min(box1[3], box2[3]) - box1[1] / crop_cols1
-        #     ibox1 = (x1, y1, x2, y2, z1)  # z-dim is ommited because the intersection is the same (already aligned)
-
-        #     # Intersecting box in relation to bbox 2
-        #     x1 = torch.max(box1[0], box2[0]) - box2[0] / crop_rows2
-        #     y1 = torch.max(box1[1], box2[1]) - box2[1] / crop_cols2
-        #     x2 = torch.min(box1[2], box2[2]) - box2[0] / crop_rows2
-        #     y2 = torch.min(box1[3], box2[3]) - box2[1] / crop_cols2
-        #     ibox2 = (x1, y1, x2, y2)
-
-
         return crop_window1[:, :, :input_depth], crop_window2[:, :, :input_depth], np.stack(local_windows, axis=0), crop_coords1, crop_coords2
 
 
 def infinite_generator_from_one_volume(img_array, save_dir, name):
     
+    relative_save_dir = os.path.join(*os.path.normpath(save_dir).split(os.sep)[-2:])  # Careful here, make sure dataset file structure is dataset_root/folder/folder/image
+    # TODO: when implementing the rest of the datasets (aside from BraTS) make a way to automatically detect how many inbetween folders there are until we reach the images
     csv_lines = []
     
     img_array[img_array < config.hu_min] = config.hu_min
@@ -350,12 +330,13 @@ def infinite_generator_from_one_volume(img_array, save_dir, name):
     while True:
         crop_window1, crop_window2, local_windows, crop_coords1, crop_coords2 = crop_pair(img_array, z_align=config.z_align)
         crop_window = np.stack((crop_window1, crop_window2), axis=0)
-        # crop_window = np.concatenate([crop_window, local_windows], axis=0)
-        # print(crop_window.shape)
-        global_path = os.path.join(save_dir, name + '_global_' + str(num_pair) + '.npy')
-        local_path = os.path.join(save_dir, name + '_local_' + str(num_pair)  + '.npy')
+        global_name = name + '_global_' + str(num_pair) + '.npy'
+        local_name = name + '_local_' + str(num_pair)  + '.npy'
+        global_path = os.path.join(save_dir, global_name)
+        local_path = os.path.join(save_dir, local_name)
         np.save(global_path, crop_window)
         np.save(local_path, local_windows)
+        relative_global_path = os.path.join(relative_save_dir, global_name)
         csv_lines.append([global_path,crop_coords1,crop_coords2])
         num_pair += 1
         if num_pair == config.scale:
@@ -375,18 +356,18 @@ def brats_preprocess():
         brats_subset_path = os.path.join(config.DATA_DIR, subset)
         folder_list = os.listdir(os.path.join(brats_subset_path))
         for folder in tqdm(folder_list, desc='Folders parsed'):
-            # print(">> Sample {}/{}".format(i, len(folder_list)))
-            file_list = glob(os.path.join(brats_subset_path, folder, "*.nii.gz"))
+            file_list = glob(os.path.join(brats_subset_path, folder, "*.nii.gz"))  # Only selects .nii.gz files (DOES NOT exclude the segmentations)
             save_dir = os.path.join(save_path, subset, folder)
             os.makedirs(save_dir, exist_ok=True)
-            for img_file in tqdm(file_list, desc='Images in folder parsed', leave=False):
+            for img_file in tqdm(file_list, desc='Images in folder parsed', leave=False):                
                 img_name = os.path.split(img_file)[-1]
-                img_array = load_sitk_with_resample(img_file)
-                img_array = sitk.GetArrayFromImage(img_array)
-                img_array = img_array.transpose(2, 1, 0)
-                img_csv_rows = infinite_generator_from_one_volume(img_array, save_dir, img_name[:-4])
-                csv_writer.writerows(img_csv_rows)
-                csv_file.flush()
+                if 'seg' not in img_name:  # Skip segmentation masks
+                    img_array = load_sitk_with_resample(img_file)
+                    img_array = sitk.GetArrayFromImage(img_array)
+                    img_array = img_array.transpose(2, 1, 0)
+                    img_csv_rows = infinite_generator_from_one_volume(img_array, save_dir, img_name[:-7])  # remove file type .nii.gz (7 chars)
+                    csv_writer.writerows(img_csv_rows)
+                    csv_file.flush()
 
     csv_file.close()
 
@@ -399,7 +380,7 @@ def luna_preprocess(fold):
     for index_subset in fold:
         print(">> Fold {}".format(index_subset))
         luna_subset_path = os.path.join(config.DATA_DIR, "subset" + str(index_subset))
-        file_list = glob(os.path.join(luna_subset_path, "*.mhd"))
+        file_list = glob(os.path.join(luna_subset_path, "*.mhd"))  # Only selects mhd files (excludes the segmentations)
         save_dir = os.path.join(save_path, 'subset' + str(index_subset))
         os.makedirs(save_dir, exist_ok=True)
         for img_file in tqdm(file_list, leave=False, desc='Images in fold parsed'):
@@ -407,7 +388,7 @@ def luna_preprocess(fold):
             img_array = load_sitk_with_resample(img_file)
             img_array = sitk.GetArrayFromImage(img_array)
             img_array = img_array.transpose(2, 1, 0)
-            img_csv_rows = infinite_generator_from_one_volume(img_array, save_dir, img_name[:-4])
+            img_csv_rows = infinite_generator_from_one_volume(img_array, save_dir, img_name[:-4])  # remove file type .mhd (4 chars)
             csv_rows += img_csv_rows
             csv_writer.writerows(csv_rows)
             csv_file.flush()

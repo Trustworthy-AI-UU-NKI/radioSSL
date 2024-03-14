@@ -171,12 +171,12 @@ class DataGenerator:
         print(f'Train Images {len(x_train)}, Valid Images {len(x_valid)}')
         spatial_transforms = []  # Removed Flip and Affine transform (TODO: Maybe put them back if it doesnt affect mask alignment)
         spatial_transforms = torchio.transforms.Compose(spatial_transforms)
-        local_transforms = [torchio.transforms.RandomNoise(std=0.01), # Removed destructive transforms (TODO: Maybe put them back once we know it works)
-                        torchio.transforms.ZNormalization()
+        local_transforms = [
+                        #    torchio.transforms.RandomNoise(std=0.01) # Removed destructive transforms and Z-norm (TODO: Maybe put them back once we know it works)
                         ]  
         local_transforms = torchio.transforms.Compose(local_transforms)
-        global_transforms = [torchio.transforms.RandomNoise(std=0.01), # Removed destructive transforms (TODO: Maybe put them back once we know it works)
-                        torchio.transforms.ZNormalization()
+        global_transforms = [
+                            # torchio.transforms.RandomNoise(std=0.01), # TODO: Maybe put them back once we know it works
                         ]  
         global_transforms = torchio.transforms.Compose(global_transforms)
 

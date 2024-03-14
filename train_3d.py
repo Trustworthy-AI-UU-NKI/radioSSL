@@ -225,7 +225,7 @@ def train_pcrlv2_inner(args, epoch, train_loader, model, optimizer, criterion, c
             prob1 = out1.softmax(2)
             prob2 = out2.softmax(2)
 
-            # Convert prediction and groudn truth to cluster masks (restore spatial position of patched image)
+            # Convert prediction and ground truth to cluster masks (restore spatial position of patched image)
             NPH = H//PH  # Number of patches at X dimension
             NPW = W//PW  # Number of patches at Y dimension
             NPD = D//PD  # Number of patches at Z dimension
@@ -235,8 +235,7 @@ def train_pcrlv2_inner(args, epoch, train_loader, model, optimizer, criterion, c
             gt2 = gt2.argmax(dim=2).reshape((B,1,NPH,NPW,NPD))
 
             # ROI-align
-            #TODO: i temporarily put the inputs to actually see if the alignment is ok
-            crop1_roi_coords, crop2_roi_coords = roi_align(input1, input2, crop1_coords, crop2_coords)
+            pred1, pred2 = roi_align(pred1, pred2, crop1_coords, crop2_coords)
 
             # Loss
             loss1 = swav_loss(gt1, gt2, prob1, prob2)  # TODO: In the future, use encoder_output_2 and roi align the clusters

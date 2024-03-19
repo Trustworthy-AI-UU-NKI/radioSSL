@@ -6,10 +6,10 @@ import warnings
 import torch.backends.cudnn
 from torch.utils.tensorboard import SummaryWriter
 from train_2d import train_pcrlv2
-from train_3d import train_pcrlv2_3d
+from train_3d import train_pcrlv2_3d, train_cluster_3d
 from data import DataGenerator, get_dataloader
 from utils import set_seed
-from finetune import train_chest_classification, train_brats_segmentation, test_brats_segmentation, train_lits_segmentation, test_lits_segmentation
+from finetune import train_brats_segmentation, test_brats_segmentation, train_lits_segmentation, test_lits_segmentation
 
 
 warnings.filterwarnings('ignore')
@@ -48,7 +48,7 @@ if __name__ == '__main__':
     print()
 
     os.environ["CUDA_VISIBLE_DEVICES"] = args.gpus
-    # torch.backends.cudnn.benchmark = True
+    torch.backends.cudnn.benchmark = True
 
     # Set seed
     set_seed(args.seed)
@@ -71,24 +71,25 @@ if __name__ == '__main__':
 
     # Create logger
     curr_time = str(time.time()).replace(".", "")
-    run_name = f'{args.model}_{args.d}d_{"sc_" if args.skip_conn else ""}pretrain_{args.pretrained}_finetune_{args.finetune}_b{args.b}_e{args.epochs}_lr{"{:f}".format(args.lr).split(".")[-1]}_r{int(args.ratio * 100)}_t{curr_time}'
     
     if args.phase in ['finetune', 'pretask']:  # If finetune or pretask, use the specified output path
         folder_name = None
         
         if args.phase == 'finetune':
+            run_name = f'{args.model}_{args.d}d_{"sc_" if args.skip_conn else ""}pretrain_{args.pretrained}_finetune_{args.finetune}_b{args.b}_e{args.epochs}_lr{"{:f}".format(args.lr).split(".")[-1]}_r{int(args.ratio * 100)}_t{curr_time}'
             pretrain_type = None
             # Pretrain types that use weights
             if args.weight:  
                 weight_dir = args.weight.lower()
+                pretrain_type = args.model
                 if 'luna' in weight_dir:
-                    pretrain_type = 'luna_pretrain'
+                    pretrain_type += '_luna_pretrain'
                 elif 'brats' in weight_dir:
-                    pretrain_type = 'brats_pretrain'
+                    pretrain_type += '_brats_pretrain'
                 elif 'lits' in weight_dir:
-                    pretrain_type = 'lits_pretrain'
+                    pretrain_type += '_lits_pretrain'
                 elif 'chest' in weight_dir:
-                    pretrain_type = 'chest_pretrain'
+                    pretrain_type += '_chest_pretrain'
             # Pretrain types that don't use weights
             elif not args.weight:
                 if args.model == 'imagenet':
@@ -98,7 +99,8 @@ if __name__ == '__main__':
             folder_name =  args.n + '_finetune' + '_' + pretrain_type
         
         elif args.phase == 'pretask':
-            folder_name = f'{args.n}_pretrain'
+            run_name = f'{args.model}_{args.d}d_{"sc_" if args.skip_conn else ""}pretask_b{args.b}_e{args.epochs}_lr{"{:f}".format(args.lr).split(".")[-1]}_t{curr_time}'
+            folder_name = args.model + '_' + args.n + '_pretrain'
         
         if not os.path.exists(os.path.join(args.output,folder_name)):
             os.makedirs(os.path.join(args.output,folder_name))
@@ -116,22 +118,21 @@ if __name__ == '__main__':
 
     # TASKS
 
+    # PRETASK
+        
     # 2D PCRLv2 pretask
     if args.model == 'pcrlv2' and args.phase == 'pretask' and args.d == 2:
-        train_pcrlv2(args, data_loader)
+        train_pcrlv2(args, data_loader, run_dir)
     
     # 3D PCRLv2 pretask
     elif args.model == 'pcrlv2' and args.phase == 'pretask' and args.d == 3:
-        train_pcrlv2_3d(args, data_loader)
+        train_pcrlv2_3d(args, data_loader, run_dir, writer=writer)
 
     # 3D Clustering pretask 
     elif args.model == 'cluster' and args.phase == 'pretask' and args.d == 3:
-        train_pcrlv2_3d(args, data_loader)  # TODO: Maybe give its own function later
-
-    # # Finetuning on Chest
-    # elif args.model == 'pcrlv2' and args.phase == 'finetune' and args.n == 'chest':
-    #     assert args.d == 2
-    #     train_chest_classification(args, data_loader)
+        train_cluster_3d(args, data_loader, run_dir, writer=writer)
+        
+    # FINETUNING
 
     # Finetuning+Testings on BraTS
     elif args.phase in 'finetune' and args.n == 'brats':

@@ -14,93 +14,6 @@ from torch.utils.tensorboard import SummaryWriter
 from matplotlib import pyplot as plt
 
 
-def train_chest_classification(args, dataloader):
-    criterion = nn.BCELoss()
-    train_generator = dataloader['train']
-    valid_generator = dataloader['eval']
-    aux_params = dict(
-        pooling='avg',  # one of 'avg', 'max'
-        dropout=0.2,  # dropout ratio, default is None
-        activation='sigmoid',  # activation function, default is None
-        classes=14,  # define number of output labels
-    )
-    model = smp.Unet('resnet18', in_channels=3, aux_params=aux_params, classes=1, encoder_weights=None)
-    if args.weight is not None:
-        weight_path = args.weight
-        if args.cpu:
-            encoder_dict = torch.load(weight_path, map_location=torch.device('cpu'))['state_dict']
-        else:
-            encoder_dict = torch.load(weight_path)['state_dict']
-        encoder_dict['fc.bias'] = 0
-        encoder_dict['fc.weight'] = 0
-        model.encoder.load_state_dict(encoder_dict)
-    optimizer = torch.optim.Adam(model.parameters(), args.lr)
-    model = nn.DataParallel(model, device_ids=[i for i in range(torch.cuda.device_count())]).cuda()
-    scheduler = torch.optim.lr_scheduler.StepLR(optimizer, step_size=50, gamma=0.5)
-    train_losses = []
-    valid_losses = []
-    avg_train_losses = []
-    avg_valid_losses = []
-    best_loss = 100000
-    num_epoch_no_improvement = 0
-
-    for epoch in range(0, args.epochs + 1):
-        scheduler.step(epoch)
-        model.train()
-        for iteration, (image, gt) in enumerate(train_generator):
-            image = image.cuda().float()
-            gt = gt.cuda().float()
-            _, pred = model(image)
-            loss = criterion(pred, gt)
-            optimizer.zero_grad()
-            loss.backward()
-            optimizer.step()
-            train_losses.append(round(loss.item(), 4))
-            if (iteration + 1) % 5 == 0:
-                print('Epoch [{}/{}], iteration {}, Loss:{:.6f}, {:.6f}'
-                      .format(epoch + 1, args.epochs, iteration + 1, loss.item(), np.average(train_losses)))
-                sys.stdout.flush()
-        with torch.no_grad():
-            model.eval()
-            print("validating....")
-            for i, (x, y) in enumerate(valid_generator):
-                x = x.cuda()
-                y = y.cuda().float()
-                _, pred = model(x)
-                loss = criterion(pred, y)
-                valid_losses.append(loss.item())
-
-        # logging
-        train_loss = np.average(train_losses)
-        valid_loss = np.average(valid_losses)
-        avg_train_losses.append(train_loss)
-        avg_valid_losses.append(valid_loss)
-        print("Epoch {}, validation loss is {:.4f}, training loss is {:.4f}".format(epoch + 1, valid_loss,
-                                                                                    train_loss))
-        train_losses = []
-        valid_losses = []
-        if valid_loss < best_loss:
-            print("Validation loss decreases from {:.4f} to {:.4f}".format(best_loss, valid_loss))
-            best_loss = valid_loss
-            num_epoch_no_improvement = 0
-            torch.save({
-                'epoch': epoch + 1,
-                'state_dict': model.module.state_dict(),  # only save encoder
-                'optimizer_state_dict': optimizer.state_dict()
-            }, os.path.join(args.output,
-                            args.model + "_" + args.n + '_' + args.phase + '_' + str(args.ratio) + '.pt'))
-            print("Saving model ", os.path.join(args.output, args.model + "_" + args.n + '_' + args.phase + '_' + str(
-                args.ratio) + '.pt'))
-        else:
-            print("Validation loss does not decrease from {:.4f}, num_epoch_no_improvement {}".format(best_loss,
-                                                                                                      num_epoch_no_improvement))
-            num_epoch_no_improvement += 1
-            if num_epoch_no_improvement == args.patience:
-                print("Early Stopping")
-                break
-        sys.stdout.flush()
-
-
 def train_segmentation(args, dataloader, in_channels, n_classes, run_dir, writer=None):
 
     # Get data
@@ -148,13 +61,19 @@ def train_segmentation(args, dataloader, in_channels, n_classes, run_dir, writer
             image = image.float()
             gt = gt.float()
 
+            # if args.tensorboard and epoch == 0:  # Only on the first iteration, write model graph on tensorboard
+            #     if args.d == 2:
+            #         writer.add_graph(model, image.permute(0,3,1,2,4).flatten(0,1))
+            #     elif args.d == 3:
+            #         writer.add_graph(model, image)
+
             if args.d == 2: # If model is 2D unet, then combine batch and slice dimension and scale input to power of 2
                 # Input dimensions
-                B, M, _, S, _ = image.shape
+                B, M, _, D, _ = image.shape
                 _, C, _, _, _ = gt.shape 
                 H, W = (128,128)
                 # Combine batch and slice dim
-                image = image.permute(0,3,1,2,4).flatten(0,1)  # B x M x H x S x W -> B*S x M x H x W
+                image = image.permute(0,3,1,2,4).reshape(B*D,M,H,W)  # B x M x H x D x W -> B*D x M x H x W
                 gt = gt.permute(0,3,1,2,4).flatten(0,1)
                 # Scale
                 image = f.interpolate(image, size=(H,W))
@@ -163,9 +82,9 @@ def train_segmentation(args, dataloader, in_channels, n_classes, run_dir, writer
             pred = model(image)
 
             if args.d == 2: # If 2D unet, then revert to original dims
-                image = image.reshape(B,S,M,H,W).permute(0,2,3,1,4)
-                gt = gt.reshape(B,S,C,H,W).permute(0,2,3,1,4)
-                pred = f.sigmoid(pred.reshape(B,S,C,H,W).permute(0,2,3,1,4))  # Also apply sigmoid becauce the 2D model doesn't
+                image = image.reshape(B,D,M,H,W).permute(0,2,3,1,4)
+                gt = gt.reshape(B,D,C,H,W).permute(0,2,3,1,4)
+                pred = f.sigmoid(pred.reshape(B,D,C,H,W).permute(0,2,3,1,4))  # Also apply sigmoid becauce the 2D model doesn't
 
             loss = criterion(pred, gt)
             optimizer.zero_grad()
@@ -185,17 +104,17 @@ def train_segmentation(args, dataloader, in_channels, n_classes, run_dir, writer
                 img_idx = 0
                 slc_idx = image.shape[3] // 2
 
-                raw_img = image[img_idx,mod_idx,:,slc_idx,:].cpu().detach().numpy()
-                gt_img = gt[img_idx,:,:,slc_idx,:].cpu().detach().numpy()
-                pred_img = pred[img_idx,:,:,slc_idx,:].cpu().detach().numpy()
+                image = image[img_idx,mod_idx,:,slc_idx,:].cpu().detach().numpy()
+                gt = gt[img_idx,:,:,slc_idx,:].cpu().detach().numpy()
+                pred = pred[img_idx,:,:,slc_idx,:].cpu().detach().numpy()
 
-                raw_img_name = f'b{b_idx}_img{img_idx}_slc{slc_idx}_raw'
-                gt_img_name = f'b{b_idx}_img{img_idx}_slc{slc_idx}_gt'
-                pred_img_name = f'b{b_idx}_img{img_idx}_slc{slc_idx}_pred'
+                image_name = f'b{b_idx}_img{img_idx}_slc{slc_idx}_raw'
+                gt_name = f'b{b_idx}_img{img_idx}_slc{slc_idx}_gt'
+                pred_name = f'b{b_idx}_img{img_idx}_slc{slc_idx}_pred'
 
-                writer.add_image(raw_img_name, img_tensor=raw_img, global_step=epoch, dataformats='HW')
-                writer.add_image(gt_img_name, img_tensor=gt_img, global_step=epoch, dataformats='CHW')
-                writer.add_image(pred_img_name, img_tensor=pred_img, global_step=epoch, dataformats='CHW')
+                writer.add_image(image_name, img_tensor=image, global_step=epoch, dataformats='HW')
+                writer.add_image(gt_name, img_tensor=gt, global_step=epoch, dataformats='CHW')
+                writer.add_image(pred_name, img_tensor=pred, global_step=epoch, dataformats='CHW')
 
         with torch.no_grad():
             model.eval()
@@ -209,11 +128,11 @@ def train_segmentation(args, dataloader, in_channels, n_classes, run_dir, writer
 
                 if args.d == 2:
                     # Input dimensions
-                    B, M, _, S, _ = x.shape
+                    B, M, _, D, _ = x.shape
                     _, C, _, _, _ = y.shape 
                     H, W = (128,128)
                     # Combine batch and slice dim
-                    x = x.permute(0,3,1,2,4).flatten(0,1)  # B x M x H x S x W -> B*S x M x H x W
+                    x = x.permute(0,3,1,2,4).flatten(0,1)  # B x M x H x D x W -> B*D x M x H x W
                     y = y.permute(0,3,1,2,4).flatten(0,1)
                     # Scale
                     x = f.interpolate(x, size=(H,W))
@@ -222,9 +141,9 @@ def train_segmentation(args, dataloader, in_channels, n_classes, run_dir, writer
                 pred = model(x)
 
                 if args.d == 2:
-                    x = x.reshape(B,S,M,H,W).permute(0,2,3,1,4)
-                    y = y.reshape(B,S,C,H,W).permute(0,2,3,1,4)
-                    pred = f.sigmoid(pred.reshape(B,S,C,H,W).permute(0,2,3,1,4))  # Also apply sigmoid becauce the 2D model doesn't
+                    x = x.reshape(B,D,M,H,W).permute(0,2,3,1,4)
+                    y = y.reshape(B,D,C,H,W).permute(0,2,3,1,4)
+                    pred = f.sigmoid(pred.reshape(B,D,C,H,W).permute(0,2,3,1,4))  # Also apply sigmoid becauce the 2D model doesn't
 
                 loss = criterion(pred, y)
                 valid_losses.append(round(loss.item(),4))
@@ -244,10 +163,10 @@ def train_segmentation(args, dataloader, in_channels, n_classes, run_dir, writer
                 'state_dict': model.module.state_dict(),
                 'optimizer_state_dict': optimizer.state_dict()
             }, run_dir + ".pt")
-            print("Saving model ", run_dir + ".pt")
+            print("Saving model ", run_dir + ".pt\n")
             model_final = deepcopy(model)  # Return only best version of model at the end of the function
         else:
-            print("Validation loss does not decrease from {:.4f}, num_epoch_no_improvement {}".format(best_loss,
+            print("Validation loss does not decrease from {:.4f}, num_epoch_no_improvement {}\n".format(best_loss,
                                                                                                       num_epoch_no_improvement))
             num_epoch_no_improvement += 1
             if num_epoch_no_improvement == args.patience:
@@ -257,10 +176,6 @@ def train_segmentation(args, dataloader, in_channels, n_classes, run_dir, writer
         if args.tensorboard:
             writer.add_scalar('loss/train', train_loss, epoch)  # Write train loss on tensorboard
             writer.add_scalar('loss/val', valid_loss, epoch)  # Write val loss on tensorboard
-            if epoch == 0:  # Only on the first iteration, write model graph on tensorboard
-                if args.d == 2:
-                    image = image.permute(0,3,1,2,4).flatten(0,1)
-                writer.add_graph(model, image)
 
         sys.stdout.flush()
 
@@ -300,11 +215,11 @@ def test_segmentation(args, dataloader, in_channels, n_classes, finetuned_model=
 
             if args.d == 2:
                 # Input dimensions
-                B, M, _, S, _ = x.shape
+                B, M, _, D, _ = x.shape
                 _, C, _, _, _ = y.shape 
                 H, W = (128,128)
                 # Combine batch and slice dim
-                x = x.permute(0,3,1,2,4).flatten(0,1)  # B x M x H x S x W -> B*S x M x H x W
+                x = x.permute(0,3,1,2,4).flatten(0,1)  # B x M x H x D x W -> B*D x M x H x W
                 y = y.permute(0,3,1,2,4).flatten(0,1)
                 # Scale
                 x = f.interpolate(x, size=(H,W))
@@ -313,9 +228,9 @@ def test_segmentation(args, dataloader, in_channels, n_classes, finetuned_model=
             pred = model(x)
 
             if args.d == 2:
-                x = x.reshape(B,S,M,H,W).permute(0,2,3,1,4)
-                y = y.reshape(B,S,C,H,W).permute(0,2,3,1,4)
-                pred = f.sigmoid(pred.reshape(B,S,C,H,W).permute(0,2,3,1,4))  # Also apply sigmoid becauce the 2D model doesn't
+                x = x.reshape(B,D,M,H,W).permute(0,2,3,1,4)
+                y = y.reshape(B,D,C,H,W).permute(0,2,3,1,4)
+                pred = f.sigmoid(pred.reshape(B,D,C,H,W).permute(0,2,3,1,4))  # Also apply sigmoid becauce the 2D model doesn't
 
             loss = criterion(pred, y)
 

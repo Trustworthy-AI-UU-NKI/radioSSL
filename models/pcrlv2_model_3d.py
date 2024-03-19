@@ -118,19 +118,6 @@ class PCRLv23d(nn.Module):
         self.sigmoid = nn.Sigmoid()
         self.skip_conn=skip_conn
 
-        # Clustering Pretask Head
-        self.patch_dim = (8,8,4)  # P1 x P2 x P3
-        self.patch_num = 512  # N  # Does nothing, just useful info
-        self.emb_dim = 64  # D
-        self.proto_num = 10  # K
-        self.cluster_projection_head = nn.Linear(self.patch_dim[0]*self.patch_dim[1]*self.patch_dim[2], self.emb_dim)  # Projection head
-        self.prototypes = nn.Linear(self.emb_dim, self.proto_num, bias=False)
-
-    def forward_cluster_head(self, x):
-        emb = self.cluster_projection_head(x)
-        out = self.prototypes(emb)
-        return emb, out
-
     def forward(self, x, local=False):
         b = x.shape[0]
         self.skip_out64 = self.down_tr64(x)
@@ -161,7 +148,46 @@ class PCRLv23d(nn.Module):
         middle_features.append([pro_64, pre_64])
         # normal decoder
         out = self.out_tr(out_up_64)
-        return out, middle_features, middle_masks, self.out512
+
+        return out, middle_features, middle_masks
+
+
+class Cluster3d(nn.Module):
+    def __init__(self, n_class=1, act='relu', norm='bn', in_channels=1, low_dim=128, student=False, skip_conn=False):
+        super(Cluster3d, self).__init__()
+        self.maxpool = nn.MaxPool3d(2)
+        self.down_tr64 = DownTransition(in_channels, 0, act, norm)
+        self.down_tr128 = DownTransition(64, 1, act, norm)
+        self.down_tr256 = DownTransition(128, 2, act, norm)
+        self.down_tr512 = DownTransition(256, 3, act, norm)
+        self.avg_pool = nn.AdaptiveAvgPool3d((1, 1, 1))
+        self.sigmoid = nn.Sigmoid()
+
+        # Clustering Pretask Head
+        self.patch_dim = (8,8,4)  # P1 x P2 x P3
+        self.patch_num = 512  # N  # Does nothing, just useful info
+        self.emb_dim = 64  # D
+        self.proto_num = 10  # K
+        self.cluster_projection_head = nn.Linear(self.patch_dim[0]*self.patch_dim[1]*self.patch_dim[2], self.emb_dim)  # Projection head
+        self.prototypes = nn.Linear(self.emb_dim, self.proto_num, bias=False)
+
+    def forward(self, x, local=False):
+        b = x.shape[0]
+        self.skip_out64 = self.down_tr64(x)
+        self.skip_out128 = self.down_tr128(self.maxpool(self.skip_out64))
+        self.skip_out256 = self.down_tr256(self.maxpool(self.skip_out128))
+        self.out512 = self.down_tr512(self.maxpool(self.skip_out256))
+
+        # Flatten spatial dims of feature map
+        B, N, PH, PW, PD = self.out512.shape  # Batch, Number of patches, Patch spatial dims
+        encoder_output = self.out512.reshape(B, N, PH*PW*PD)
+
+        # Get embeddings and output preds
+        emb = self.cluster_projection_head(encoder_output)
+        out = self.prototypes(emb)
+
+        return emb, out
+
 
 class TraceWrapper(torch.nn.Module):
     # Wrapper class for PCRLv23D for tracing the model with tensorboard. It's because its forward outputs a tuple and writer.add_graph wants a tensor output

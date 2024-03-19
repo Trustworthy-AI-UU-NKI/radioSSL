@@ -1,4 +1,3 @@
-from .chestDataset import Pcrlv2ChestPretask, ChestFineTune
-from .lunaDataset import Pcrlv2LunaPretask, LunaFineTune
-from .bratsDataset import Pcrlv2BraTSPretask, BratsFineTune
-from .litsDataset import LitsFineTune
+from .lunaDataset import LunaPretask, LunaFineTune
+from .bratsDataset import BratsPretask, BratsFineTune
+from .litsDataset import LitsPretask, LitsFineTune

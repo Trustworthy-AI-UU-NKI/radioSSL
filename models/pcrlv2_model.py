@@ -195,7 +195,7 @@ class PCRLv2Decoder(nn.Module):
 
 
 class PCRLv2(nn.Module):
-    def __init__(self, in_channels=3, n_class=3, low_dim=128, encoder_weights=None, segmentation=False):
+    def __init__(self, in_channels=1, n_class=3, low_dim=128, encoder_weights=None, segmentation=False):
         super(PCRLv2, self).__init__()
         self.model = smp.Unet('resnet18', in_channels=in_channels, classes=n_class, encoder_weights=encoder_weights)
         self.model.decoder = PCRLv2Decoder(self.model.encoder.out_channels)

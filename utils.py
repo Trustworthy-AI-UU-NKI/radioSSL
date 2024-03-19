@@ -487,8 +487,8 @@ def sinkhorn(args, Q: torch.Tensor, nmb_iters: int) -> torch.Tensor:
         return (Q / torch.sum(Q, dim=0, keepdim=True)).t().float()
 
 
-def roi_align(pred1, pred2, box1, box2):
-    # Predicted cluster assignments to align: pred1, pred2
+def roi_align_intersect(pred1, pred2, gt1, gt2, box1, box2):
+    # Cluster assignments to align for crop 1 and crop 2: pred1, pred2, gt1, gt2
     # Dimensions (H,W,Z) of input crop: crop_shape
     # Coordinates of the crop bounding box : box1, box2
     # ATTENTION AT THE ORDER OF DIMS: box is [x1,x2,y1,y2,z1,z2], ibox is [y1,x1,y2.x2]
@@ -499,10 +499,10 @@ def roi_align(pred1, pred2, box1, box2):
     H2 = box2[:,1] - box2[:,0]
     W2 = box2[:,3] - box2[:,2]
 
-    # Patched crop dimensions: (num patches in height) x (num patches in width) x (num patches in depth)
-    B, C, NPH, NPW, NPD = pred1.shape
+    # Pooled crop dimensions: (num patches in height) x (num patches in width) x (num patches in depth)
+    B, K, NPH, NPW, NPD = pred1.shape
 
-    # Calculate interesection box of the two bounding boxes
+    # Calculate interesection box of the two crop bounding boxes
     x1 = torch.maximum(box1[:,0], box2[:,0])
     y1 = torch.maximum(box1[:,2], box2[:,2])
     x2 = torch.minimum(box1[:,1], box2[:,1])
@@ -515,7 +515,7 @@ def roi_align(pred1, pred2, box1, box2):
     # Coordinates of intersecting box inside bbox 2 (percentage coordinates)
     ibox2 = torch.stack([(y1-box2[:,2])/W2, (x1-box2[:,0])/H2, (y2-box2[:,2])/W2, (x2-box2[:,0])/H2]) .T
 
-    # Convert percentage coordinates to coordinates in patched crop
+    # Convert percentage coordinates to coordinates in pooled crop
     for i, NP in enumerate([NPH,NPW,NPH,NPW]):
         ibox1[:,i] = ibox1[:,i]*NP
         ibox2[:,i] = ibox2[:,i]*NP
@@ -527,16 +527,21 @@ def roi_align(pred1, pred2, box1, box2):
     # Preprocess alignments for roi_align
     align1 = align1.reshape(B*NPD,4) # Flatten batch and slice dimension
     align2 = align2.reshape(B*NPD,4)
-    align1 = torch.cat((torch.arange(0,B*NPD).unsqueeze(1),align1),dim=1)  # Add index column
-    align2 = torch.cat((torch.arange(0,B*NPD).unsqueeze(1),align2),dim=1) 
+    idx = torch.arange(0,B*NPD).unsqueeze(1).to(pred1.device)
+    align1 = torch.cat((idx,align1),dim=1)  # Add index column
+    align2 = torch.cat((idx,align2),dim=1) 
 
-    # Flatten batch and slice dimension of predictions
-    pred1 = pred1.permute(0,4,1,2,3).reshape(B*NPD,1,NPH,NPW).float()
-    pred2 = pred2.permute(0,4,1,2,3).reshape(B*NPD,1,NPH,NPW).float()
+    # Flatten batch and slice dimension of crops
+    pred1 = pred1.permute(0,4,1,2,3).reshape(B*NPD,K,NPH,NPW).float()
+    pred2 = pred2.permute(0,4,1,2,3).reshape(B*NPD,K,NPH,NPW).float()
+    gt1 = gt1.permute(0,4,1,2,3).reshape(B*NPD,K,NPH,NPW).float()
+    gt2 = gt2.permute(0,4,1,2,3).reshape(B*NPD,K,NPH,NPW).float()
 
     # ROI-align and restore original dimensions
     # Note: the roi_align function considers [0,0] the bottom-left corner, that's why ibox is [y1,x1,y2,x2]
-    pred1_align = ops.roi_align(pred1, boxes=align1, output_size=(NPH, NPW), aligned=True).reshape(B, NPD, 1, NPH, NPW).permute(0,2,3,4,1)
-    pred2_align = ops.roi_align(pred2, boxes=align2, output_size=(NPH, NPW), aligned=True).reshape(B, NPD, 1, NPH, NPW).permute(0,2,3,4,1)
+    pred1_align = ops.roi_align(pred1, boxes=align1, output_size=(NPH, NPW), aligned=True).reshape(B, NPD, K, NPH, NPW).permute(0,2,3,4,1)
+    pred2_align = ops.roi_align(pred2, boxes=align2, output_size=(NPH, NPW), aligned=True).reshape(B, NPD, K, NPH, NPW).permute(0,2,3,4,1)
+    gt1_align = ops.roi_align(gt1, boxes=align1, output_size=(NPH, NPW), aligned=True).reshape(B, NPD, K, NPH, NPW).permute(0,2,3,4,1)
+    gt2_align = ops.roi_align(gt2, boxes=align2, output_size=(NPH, NPW), aligned=True).reshape(B, NPD, K, NPH, NPW).permute(0,2,3,4,1)
 
-    return pred1_align, pred2_align
+    return pred1_align, pred2_align, gt1_align, gt2_align

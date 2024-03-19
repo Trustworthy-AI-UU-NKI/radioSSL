@@ -28,7 +28,7 @@ parser.add_option("--input_cols", dest="input_cols", help="input cols", default=
 parser.add_option("--input_deps", dest="input_deps", help="input deps", default=32, type="int")
 parser.add_option("--crop_rows", dest="crop_rows", help="crop rows", default=64, type="int")
 parser.add_option("--crop_cols", dest="crop_cols", help="crop cols", default=64, type="int")
-parser.add_option("--lung_max", dest="lung_max", help="lung max", default=0.15, type="int")
+parser.add_option("--lung_max", dest="lung_max", help="lung max", default=0.15, type="float")
 parser.add_option("--data", dest="data", help="the directory of the dataset", default='/data/LUNA16',
                   type="string")
 parser.add_option("--save", dest="save", help="the directory of processed 3D cubes",
@@ -182,7 +182,7 @@ def cal_iou(box1, box2):
     return iou
 
 
-def crop_pair(img_array, z_align = False):
+q
 
     while True:
         size_x, size_y, size_z = img_array.shape
@@ -317,17 +317,18 @@ def crop_pair(img_array, z_align = False):
         return crop_window1[:, :, :input_depth], crop_window2[:, :, :input_depth], np.stack(local_windows, axis=0), crop_coords1, crop_coords2
 
 
-def infinite_generator_from_one_volume(img_array, save_dir, name):
-    
-    relative_save_dir = os.path.join(*os.path.normpath(save_dir).split(os.sep)[-2:])  # Careful here, make sure dataset file structure is dataset_root/folder/folder/image
-    # TODO: when implementing the rest of the datasets (aside from BraTS) make a way to automatically detect how many inbetween folders there are until we reach the images
+def infinite_generator_from_one_volume(img_array, save_dir, root_dir, name):
+    split_root_dir = os.path.normpath(root_dir).split(os.sep)
+    split_save_dir = os.path.normpath(save_dir).split(os.sep)
+    depth_from_root_to_data = len(split_root_dir) - len(split_save_dir)
+    relative_save_dir = os.path.join(*split_save_dir[depth_from_root_to_data:])  # Careful here, make sure dataset file structure is dataset_root/folder/folder/image
+
     csv_lines = []
     
     img_array[img_array < config.hu_min] = config.hu_min
     img_array[img_array > config.hu_max] = config.hu_max
     img_array = 1.0 * (img_array - config.hu_min) / (config.hu_max - config.hu_min)
-    num_pair = 0
-    while True:
+    for num_pair in tqdm(range(config.scale), desc='Crops in image generated', leave=True):
         crop_window1, crop_window2, local_windows, crop_coords1, crop_coords2 = crop_pair(img_array, z_align=config.z_align)
         crop_window = np.stack((crop_window1, crop_window2), axis=0)
         global_name = name + '_global_' + str(num_pair) + '.npy'
@@ -338,9 +339,6 @@ def infinite_generator_from_one_volume(img_array, save_dir, name):
         np.save(local_path, local_windows)
         relative_global_path = os.path.join(relative_save_dir, global_name)
         csv_lines.append([global_path,crop_coords1,crop_coords2])
-        num_pair += 1
-        if num_pair == config.scale:
-            break
 
     return csv_lines
 
@@ -365,7 +363,7 @@ def brats_preprocess():
                     img_array = load_sitk_with_resample(img_file)
                     img_array = sitk.GetArrayFromImage(img_array)
                     img_array = img_array.transpose(2, 1, 0)
-                    img_csv_rows = infinite_generator_from_one_volume(img_array, save_dir, img_name[:-7])  # remove file type .nii.gz (7 chars)
+                    img_csv_rows = infinite_generator_from_one_volume(img_array=img_array, save_dir=save_dir, root_dir=save_path, name=img_name[:-4])  # remove file type .mhd (4 chars)
                     csv_writer.writerows(img_csv_rows)
                     csv_file.flush()
 
@@ -374,33 +372,42 @@ def brats_preprocess():
 def luna_preprocess(fold):
     save_path = config.SAVE_DIR
 
-    csv_file = open(os.path.join(save_path,'crop_coords.csv'), 'w', newline='\n')
-    csv_writer = csv.writer(csv_file)
-
     for index_subset in fold:
+        csv_file = open(os.path.join(save_path,f'crop_coords_{index_subset}.csv'), 'w', newline='\n')
+        csv_writer = csv.writer(csv_file)
         print(">> Fold {}".format(index_subset))
         luna_subset_path = os.path.join(config.DATA_DIR, "subset" + str(index_subset))
         file_list = glob(os.path.join(luna_subset_path, "*.mhd"))  # Only selects mhd files (excludes the segmentations)
-        save_dir = os.path.join(save_path, 'subset' + str(index_subset))
+        subset = 'subset' + str(index_subset)
+        save_dir = os.path.join(save_path, subset)
+        
         os.makedirs(save_dir, exist_ok=True)
-        for img_file in tqdm(file_list, leave=False, desc='Images in fold parsed'):
+        for img_file in tqdm(file_list, desc=f'Images in fold {index_subset} parsed'):
             img_name = os.path.split(img_file)[-1]
             img_array = load_sitk_with_resample(img_file)
             img_array = sitk.GetArrayFromImage(img_array)
             img_array = img_array.transpose(2, 1, 0)
-            img_csv_rows = infinite_generator_from_one_volume(img_array, save_dir, img_name[:-4])  # remove file type .mhd (4 chars)
-            csv_rows += img_csv_rows
-            csv_writer.writerows(csv_rows)
+            img_csv_rows = infinite_generator_from_one_volume(img_array=img_array, save_dir=save_dir, root_dir=save_path, name=img_name[:-4])  # remove file type .mhd (4 chars)
+            csv_writer.writerows(img_csv_rows)
             csv_file.flush()
 
-    csv_file.close()
+        csv_file.close()
+    
+    # # Combine csv files
+    # csv_final_file = open(os.path.join(save_path,f'crop_coords_{index_subset}.csv'), 'w', newline='\n')
+    # csv_final_writer = csv.writer(csv_file)
+    # csv_files = [open(os.path.join(save_path,f'crop_coords_{index_subset}.csv'), 'r', newline='\n') for index_subset in fold]
+
+
+
+
     
 
 # Main execution    
 if options.n == 'luna':
     assert options.lung_max == 0.15
-    with Pool(5) as p:
-        p.map(luna_preprocess, [[0, 1], [2, 3], [4, 5], [6, 7], [8, 9]])
+    with Pool(10) as p:
+        p.map(luna_preprocess, [[0], [1], [2], [3], [4], [5], [6], [7], [8], [9]])
 elif options.n == 'brats':
     assert options.lung_max == 1
     brats_preprocess()

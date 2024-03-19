@@ -8,6 +8,7 @@ import numpy as np
 import torch
 import torch.backends.cudnn as cudnn
 import torch.nn as nn
+import torch.nn.functional as f
 import random
 from utils import adjust_learning_rate, AverageMeter
 from models import PCRLv2
@@ -59,12 +60,13 @@ def mixup_data(x, alpha=1.0, index=None, lam=None, ):
     return mixed_x, lam, index
 
 
-def train_pcrlv2(args, data_loader, out_channel=3):
+def train_pcrlv2(args, data_loader, run_dir, out_channel=3, writer=None):
     train_loader = data_loader['train']
     # create model and optimizer
     model = PCRLv2()
 
-    model = model.cuda()
+    if not args.cpu:
+        model = model.cuda()
 
     optimizer = torch.optim.SGD(model.parameters(),
                                 lr=args.lr,
@@ -74,11 +76,13 @@ def train_pcrlv2(args, data_loader, out_channel=3):
         model, optimizer = amp.initialize(model, optimizer, opt_level='O1')
     model = nn.DataParallel(model)
 
-    criterion = nn.MSELoss().cuda()
-    cosine = nn.CosineSimilarity().cuda()
-    cudnn.benchmark = True
-    loss_list = []
-    mg_loss_list = []
+    criterion = nn.MSELoss()
+    cosine = nn.CosineSimilarity()
+    if not args.cpu:
+        criterion = criterion.cuda()
+        cosine = cosine.cuda()
+        cudnn.benchmark = True
+
     for epoch in range(0, args.epochs + 1):
 
 
@@ -87,11 +91,14 @@ def train_pcrlv2(args, data_loader, out_channel=3):
 
         time1 = time.time()
 
-        loss, mg_loss, prob = train_pcrlv2_inner(args, epoch, train_loader, model, optimizer, criterion, cosine)
-        loss_list.append(loss)
-        mg_loss_list.append(mg_loss)
+        loss, prob, total_loss = train_pcrlv2_inner(args, epoch, train_loader, model, optimizer, criterion, cosine)
         time2 = time.time()
         print('epoch {}, total time {:.2f}'.format(epoch, time2 - time1))
+        
+        if args.tensorboard:
+            writer.add_scalar('loss/train', total_loss, epoch)  # Write train loss on tensorboard
+
+        
         # save model
         if epoch % 100 == 0 or epoch == 240:
             # saving the model
@@ -99,10 +106,9 @@ def train_pcrlv2(args, data_loader, out_channel=3):
             state = {'opt': args, 'state_dict': model.module.model.encoder.state_dict(),
                      'optimizer': optimizer.state_dict(), 'epoch': epoch}
 
-            save_file = os.path.join(args.output,
-                                     args.model + "_" + args.n + '_' + args.phase + '_' + str(
-                                         args.ratio) + '_' + str(epoch) + '.pt')
+            save_file = run_dir + '.pt'
             torch.save(state, save_file)
+
             # help release GPU memory
             del state
         torch.cuda.empty_cache()
@@ -128,39 +134,59 @@ def train_pcrlv2_inner(args, epoch, train_loader, model, optimizer, criterion, c
     loss_meter = AverageMeter()
     mg_loss_meter = AverageMeter()
     prob_meter = AverageMeter()
-    all_loss_meter = AverageMeter()
+    total_loss_meter = AverageMeter()
 
     end = time.time()
-    for idx, (input1, input2, gt, gt2, local_views) in enumerate(train_loader):
+    for idx, (input1, input2, gt1, gt2, _, _, local_views) in enumerate(train_loader):
         data_time.update(time.time() - end)
 
-        bsz = input1.size(0)
-        x1 = input1.float().cuda()
-        x2 = input2.float().cuda()
-        gt = gt.float().cuda()
+        x1 = input1.float()
+        x2 = input2.float()
+        gt1 = gt1.float()
+
+        if not args.cpu:
+            x1 = x1.cuda()
+            x2 = x2.float()
+            gt1 = gt1.cuda()
+
+        # Convert 3D input to 2D
+        B, M, H, W, D = x1.shape
+        _, C, _, _, _ = gt1.shape 
+        x1 = x1.permute(0,4,1,2,3).reshape(B*D,M,H,W)  # B x M x H x W x D -> B*D x M x H x W
+        x2 = x2.permute(0,4,1,2,3).reshape(B*D,M,H,W)
+        gt1 = gt1.permute(0,4,1,2,3).reshape(B*D,M,H,W)
+        gt2 = gt2.permute(0,4,1,2,3).reshape(B*D,M,H,W)
+
         decoder_outputs1, mask1, middle_masks1 = model(x1)
         decoder_outputs2, mask2, _ = model(x2)
-        # print(len(local_views), local_views[0].shape)
+
         loss2, index2 = cos_loss(cosine, decoder_outputs1, decoder_outputs2)
         local_loss = 0.0
-        local_input = torch.cat(local_views, dim=0)# 6 * bsz, 3, 96, 96
-        local_views_outputs, _, _ = model(local_input, local=True)# 4 * 2 * [6 * bsz, 3, 96, 96]
-        # print(len(local_views_outputs),local_views_outputs[0].shape)
+
+        local_input = torch.cat(local_views, dim=0) 
+
+        # Convert 3D input to 2D
+        BL, _, HL, WL, DL = local_input.shape
+        local_input = local_input.permute(0,4,1,2,3).reshape(BL*DL,M,HL,WL)  # 6 * B * D, 3, 96, 96
+
+        local_views_outputs, _, _ = model(local_input, local=True) # 5 * 2 * [6 * B * D, 3, 96, 96]
         local_views_outputs = [torch.stack(t) for t in local_views_outputs]
-       #  print(local_views_outputs[0].shape)
+
         for i in range(len(local_views)):
-            # local_views_outputs, _, _ = model(local_views[i], local=True)
-            local_views_outputs_tmp = [t[:, bsz * i: bsz * (i + 1)] for t in local_views_outputs]
+            local_views_outputs_tmp = [t[:, B * D * i: B * D * (i + 1)] for t in local_views_outputs]
             loss_local_1, _ = cos_loss(cosine, decoder_outputs1, local_views_outputs_tmp)
             loss_local_2, _ = cos_loss(cosine, decoder_outputs2, local_views_outputs_tmp)
             local_loss += loss_local_1
             local_loss += loss_local_2
         local_loss = local_loss / (2 * len(local_views))
-        loss1 = criterion(mask1, gt)
+        loss1 = criterion(mask1, gt1)
         beta = 0.5 * (1. + math.cos(math.pi * epoch / 240))
-        loss4 = beta * criterion(middle_masks1[index2], gt)
+        loss4 = beta * criterion(middle_masks1[index2], gt1)
+        
+        # Total Loss
         loss = loss1 + loss2 + local_loss + loss4
-        # ===================backward=====================
+
+        # Backward
         optimizer.zero_grad()
         if args.amp:
             with amp.scale_loss(loss, optimizer) as scaled_loss:
@@ -171,16 +197,16 @@ def train_pcrlv2_inner(args, epoch, train_loader, model, optimizer, criterion, c
         # torch.nn.utils.clip_grad_norm_(model.parameters(), clip_value)
         optimizer.step()
 
-        # ===================meters=====================
+        # Meters
         mg_loss_meter.update(loss1.item(), bsz)
         loss_meter.update(loss2.item(), bsz)
         prob_meter.update(local_loss, bsz)
-        all_loss_meter.update(loss.item(), bsz)
+        total_loss_meter.update(loss.item(), bsz)
         torch.cuda.synchronize()
         batch_time.update(time.time() - end)
         end = time.time()
 
-        # print info
+        # Print info
         if (idx + 1) % 10 == 0:
             print('Train: [{0}][{1}/{2}]\t'
                   'BT {batch_time.val:.3f} ({batch_time.avg:.3f})\t'
@@ -192,4 +218,4 @@ def train_pcrlv2_inner(args, epoch, train_loader, model, optimizer, criterion, c
                 data_time=data_time, c2l_loss=loss_meter, mg_loss=mg_loss_meter, prob=prob_meter))
             sys.stdout.flush()
 
-    return loss_meter.avg, mg_loss_meter.avg, prob_meter.avg
+    return mg_loss_meter.avg, prob_meter.avg, total_loss_meter.avg, writer

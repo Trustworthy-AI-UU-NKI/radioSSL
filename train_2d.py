@@ -166,14 +166,18 @@ def train_pcrlv2_inner(args, epoch, train_loader, model, optimizer, criterion, c
         local_input = torch.cat(local_views, dim=0) 
 
         # Convert 3D input to 2D
-        BL, _, HL, WL, DL = local_input.shape
-        local_input = local_input.permute(0,4,1,2,3).reshape(BL*DL,M,HL,WL)  # 6 * B * D, 3, 96, 96
+        BL, _, HL, WL, DL = local_input.shape # BL = 6 * B 
+        local_input = local_input.permute(0,4,1,2,3).reshape(BL*DL,M,HL,WL)  # 6 * B * DL, 3, 96, 96
 
-        local_views_outputs, _, _ = model(local_input, local=True) # 5 * 2 * [6 * B * D, 3, 96, 96]
+        local_views_outputs, _, _ = model(local_input, local=True) # 4 * 2 * [6 * B * DL, 3, 96, 96]
         local_views_outputs = [torch.stack(t) for t in local_views_outputs]
 
+        # Because global and local views have diff num of slices so diff batch sizes (B*D and B*DL), we only take the slices of the local view from the global one
+        decoder_outputs1 = [[t[0][:B*DL,:], t[1][:B*DL,:]] for t in decoder_outputs1]
+        decoder_outputs2 = [[t[0][:B*DL,:], t[1][:B*DL,:]] for t in decoder_outputs2]
+
         for i in range(len(local_views)):
-            local_views_outputs_tmp = [t[:, B * D * i: B * D * (i + 1)] for t in local_views_outputs]
+            local_views_outputs_tmp = [t[:, B * DL * i: B * DL * (i + 1)] for t in local_views_outputs]  # We use B * DL and not BL * BD because BL = B*6 and we iterate over the 6 local views
             loss_local_1, _ = cos_loss(cosine, decoder_outputs1, local_views_outputs_tmp)
             loss_local_2, _ = cos_loss(cosine, decoder_outputs2, local_views_outputs_tmp)
             local_loss += loss_local_1
@@ -198,10 +202,10 @@ def train_pcrlv2_inner(args, epoch, train_loader, model, optimizer, criterion, c
         optimizer.step()
 
         # Meters
-        mg_loss_meter.update(loss1.item(), bsz)
-        loss_meter.update(loss2.item(), bsz)
-        prob_meter.update(local_loss, bsz)
-        total_loss_meter.update(loss.item(), bsz)
+        mg_loss_meter.update(loss1.item(), B*D)
+        loss_meter.update(loss2.item(), B*D)
+        prob_meter.update(local_loss, B*DL)
+        total_loss_meter.update(loss.item(), B*DL)
         torch.cuda.synchronize()
         batch_time.update(time.time() - end)
         end = time.time()
@@ -218,4 +222,4 @@ def train_pcrlv2_inner(args, epoch, train_loader, model, optimizer, criterion, c
                 data_time=data_time, c2l_loss=loss_meter, mg_loss=mg_loss_meter, prob=prob_meter))
             sys.stdout.flush()
 
-    return mg_loss_meter.avg, prob_meter.avg, total_loss_meter.avg, writer
+    return mg_loss_meter.avg, prob_meter.avg, total_loss_meter.avg

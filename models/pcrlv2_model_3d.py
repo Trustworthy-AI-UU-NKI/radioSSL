@@ -153,7 +153,7 @@ class PCRLv23d(nn.Module):
 
 
 class Cluster3d(nn.Module):
-    def __init__(self, n_class=1, act='relu', norm='bn', in_channels=1, low_dim=128, student=False, skip_conn=False):
+    def __init__(self, n_clusters=10, act='relu', norm='bn', in_channels=1):
         super(Cluster3d, self).__init__()
         self.maxpool = nn.MaxPool3d(2)
         self.down_tr64 = DownTransition(in_channels, 0, act, norm)
@@ -167,7 +167,7 @@ class Cluster3d(nn.Module):
         self.patch_dim = (8,8,4)  # P1 x P2 x P3
         self.patch_num = 512  # N  # Does nothing, just useful info
         self.emb_dim = 64  # D
-        self.proto_num = 10  # K
+        self.proto_num = n_clusters  # K
         self.cluster_projection_head = nn.Linear(self.patch_dim[0]*self.patch_dim[1]*self.patch_dim[2], self.emb_dim)  # Projection head
         self.prototypes = nn.Linear(self.emb_dim, self.proto_num, bias=False)
 

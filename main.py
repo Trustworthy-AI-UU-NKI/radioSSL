@@ -2,6 +2,7 @@ import argparse
 import os
 import time
 import warnings
+import re
 
 import torch.backends.cudnn
 from torch.utils.tensorboard import SummaryWriter
@@ -38,6 +39,7 @@ if __name__ == '__main__':
     parser.add_argument('--patience', default=None, type=int)
     parser.add_argument('--amp', action='store_true', default=False)
     parser.add_argument('--skip_conn', action='store_true', default=False)
+    parser.add_argument('--k', default=10, type=int, help='number of clusters for clustering pretask')
     parser.add_argument('--tensorboard', action='store_true', default=False)
     parser.add_argument('--vis', action='store_true', default=False)
     parser.add_argument('--cpu', action='store_true', default=False)
@@ -76,7 +78,10 @@ if __name__ == '__main__':
         folder_name = None
         
         if args.phase == 'finetune':
-            run_name = f'{args.model}_{args.d}d_{"sc_" if args.skip_conn else ""}pretrain_{args.pretrained}_finetune_{args.finetune}_b{args.b}_e{args.epochs}_lr{"{:f}".format(args.lr).split(".")[-1]}_r{int(args.ratio * 100)}_t{curr_time}'
+            cluster_k = re.search(r'_k._', args.weight).group(0)[1:4] if args.model == 'cluster' else ''
+            sc = 'sc_' if args.skip_conn else ''
+            run_name = f'{args.model}_{args.d}d_{cluster_k}{sc}pretrain_{args.pretrained}_finetune_{args.finetune}_b{args.b}_e{args.epochs}_lr{"{:f}".format(args.lr).split(".")[-1]}_r{int(args.ratio * 100)}_t{curr_time}'
+            
             pretrain_type = None
             # Pretrain types that use weights
             if args.weight:  
@@ -99,7 +104,10 @@ if __name__ == '__main__':
             folder_name =  args.n + '_finetune' + '_' + pretrain_type
         
         elif args.phase == 'pretask':
-            run_name = f'{args.model}_{args.d}d_{"sc_" if args.skip_conn else ""}pretask_b{args.b}_e{args.epochs}_lr{"{:f}".format(args.lr).split(".")[-1]}_t{curr_time}'
+            if args.model == 'pcrlv2':
+                run_name = f'{args.model}_{args.d}d_{"sc_" if args.skip_conn else ""}pretask_b{args.b}_e{args.epochs}_lr{"{:f}".format(args.lr).split(".")[-1]}_t{curr_time}'
+            elif args.model == 'cluster':
+                run_name = f'{args.model}_{args.d}d_k{args.k}_pretask_b{args.b}_e{args.epochs}_lr{"{:f}".format(args.lr).split(".")[-1]}_t{curr_time}'
             folder_name = args.model + '_' + args.n + '_pretrain'
         
         if not os.path.exists(os.path.join(args.output,folder_name)):
@@ -122,7 +130,7 @@ if __name__ == '__main__':
         
     # 2D PCRLv2 pretask
     if args.model == 'pcrlv2' and args.phase == 'pretask' and args.d == 2:
-        train_pcrlv2(args, data_loader, run_dir)
+        train_pcrlv2(args, data_loader, run_dir, writer=writer)
     
     # 3D PCRLv2 pretask
     elif args.model == 'pcrlv2' and args.phase == 'pretask' and args.d == 3:

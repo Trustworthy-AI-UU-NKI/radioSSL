@@ -69,13 +69,13 @@ def train_segmentation(args, dataloader, in_channels, n_classes, run_dir, writer
 
             if args.d == 2: # If model is 2D unet, then combine batch and slice dimension and scale input to power of 2
                 # Input dimensions
-                B, M, _, D, _ = image.shape
+                B, M, H, D, W = image.shape
                 _, C, _, _, _ = gt.shape 
-                H, W = (128,128)
                 # Combine batch and slice dim
                 image = image.permute(0,3,1,2,4).reshape(B*D,M,H,W)  # B x M x H x D x W -> B*D x M x H x W
-                gt = gt.permute(0,3,1,2,4).flatten(0,1)
+                gt = gt.permute(0,3,1,2,4).flatten(0,1).reshape(B*D,C,H,W)
                 # Scale
+                H, W = (128,128)
                 image = f.interpolate(image, size=(H,W))
                 gt = f.interpolate(gt, size=(H,W))
 
@@ -143,7 +143,7 @@ def train_segmentation(args, dataloader, in_channels, n_classes, run_dir, writer
                 if args.d == 2:
                     x = x.reshape(B,D,M,H,W).permute(0,2,3,1,4)
                     y = y.reshape(B,D,C,H,W).permute(0,2,3,1,4)
-                    pred = f.sigmoid(pred.reshape(B,D,C,H,W).permute(0,2,3,1,4))  # Also apply sigmoid becauce the 2D model doesn't
+                    pred = f.sigmoid(pred.reshape(B,D,C,H,W).permute(0,2,3,1,4))  # Also apply sigmoid because the 2D model doesn't
 
                 loss = criterion(pred, y)
                 valid_losses.append(round(loss.item(),4))

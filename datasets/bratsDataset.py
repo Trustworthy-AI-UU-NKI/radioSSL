@@ -41,7 +41,7 @@ class BratsPretask(Dataset):
         
         crop1_coords = []
         crop2_coords = []
-        if self.coords:
+        if self.config.model == 'cluster':
             crop1_coords = np.array(eval(self.coords.loc[relative_image_path]['crop1']))
             crop2_coords = np.array(eval(self.coords.loc[relative_image_path]['crop2']))
 

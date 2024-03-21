@@ -52,7 +52,7 @@ def train_3d(args, data_loader, run_dir, out_channel=3, writer=None):
 
     if args.model == 'cluster':
         # Generate colors for cluster masks (make 10 of them, but later TODO: base it on cluster number K)
-        palette = sns.color_palette()
+        palette = sns.color_palette(palette='bright', n_colors=args.k)
         colors = torch.Tensor([list(color) for color in palette])
 
     torch.backends.cudnn.deterministic = True
@@ -64,7 +64,7 @@ def train_3d(args, data_loader, run_dir, out_channel=3, writer=None):
     if args.model == 'pcrlv2':
         model = PCRLv23d(skip_conn=args.skip_conn)
     elif args.model == 'cluster':
-        model = Cluster3d(skip_conn=args.skip_conn)
+        model = Cluster3d(n_clusters=args.k)
     if not args.cpu:
         model = model.cuda()
 
@@ -150,14 +150,14 @@ def train_pcrlv2_inner(args, epoch, train_loader, model, optimizer, criterion, c
             crop2_coords = crop2_coords.cuda()
 
         # Get predictions
-        mask1, decoder_outputs1, middle_masks1, encoder_output1 = model(x1)
-        mask2, decoder_outputs2, _, encoder_output2 = model(x2)
+        mask1, decoder_outputs1, middle_masks1 = model(x1)
+        mask2, decoder_outputs2, _ = model(x2)
 
         loss2, index2 = cos_loss(cosine, decoder_outputs1, decoder_outputs2)
         local_loss = 0.0
 
         local_input = torch.cat(local_views, dim=0)  # 6 * bsz, 3, d, 96, 96
-        _, local_views_outputs, _, _ = model(local_input, local=True)  # 4 * 2 * [6 * bsz, 3, d, 96, 96]
+        _, local_views_outputs, _ = model(local_input, local=True)  # 4 * 2 * [6 * bsz, 3, d, 96, 96]
         local_views_outputs = [torch.stack(t) for t in local_views_outputs]
         
         for i in range(len(local_views)):
@@ -218,6 +218,10 @@ def train_pcrlv2_inner(args, epoch, train_loader, model, optimizer, criterion, c
     # TODO: Add eval loop just for visualization
 
     return mg_loss_meter.avg, prob_meter.avg, total_loss_meter.avg, writer
+
+
+def train_pcrlv2_3d(args, data_loader, run_dir, out_channel=3, writer=None):
+    train_3d(args, data_loader, run_dir, out_channel=out_channel, writer=writer)
 
 
 def train_cluster_inner(args, epoch, train_loader, model, optimizer, criterion, cosine, writer, colors):
@@ -438,10 +442,6 @@ def train_cluster_inner(args, epoch, train_loader, model, optimizer, criterion, 
     # TODO: Add eval loop just for visualization
 
     return mg_loss_meter.avg, prob_meter.avg, total_loss_meter.avg, writer
-
-
-def train_pcrlv2_3d(args, data_loader, run_dir, out_channel=3, writer=None):
-    train_3d(args, data_loader, run_dir, out_channel=out_channel, writer=writer)
 
 
 def train_cluster_3d(args, data_loader, run_dir, out_channel=3, writer=None):

@@ -169,9 +169,9 @@ class DataGenerator:
                         ]  
         global_transforms = torchio.transforms.Compose(global_transforms)
 
-        train_ds = BraTSPretask(args, x_train, train=True, transform=spatial_transforms,
+        train_ds = BratsPretask(args, x_train, train=True, transform=spatial_transforms,
                                      global_transforms=global_transforms, local_transforms=local_transforms)
-        valid_ds = BraTSPretask(args, x_valid, train=False)
+        valid_ds = BratsPretask(args, x_valid, train=False)
 
         generator = torch.Generator()
         generator.manual_seed(args.seed)

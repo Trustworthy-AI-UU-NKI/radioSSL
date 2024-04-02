@@ -16,10 +16,10 @@ class BratsPretask(Dataset):
         self.config = config
         self.imgs = img_train
         self.train = train
-        self.transform = transform
-        self.global_transforms = global_transforms
+        self.transform = transform if transform != None else torchio.transforms.Compose([])
+        self.global_transforms = global_transforms if global_transforms != None else torchio.transforms.Compose([])
         self.local_input_enable = (config.model != 'cluster')  # Do not include local_views in dataloader for cluster_pretask (TODO: might change later)
-        self.local_transforms = local_transforms
+        self.local_transforms = local_transforms if local_transforms != None else torchio.transforms.Compose([])
         self.norm = torchio.transforms.ZNormalization()
         if config.model == 'cluster' :
             self.coords = pd.read_csv(os.path.join(config.data,'crop_coords.csv'), names=['path','crop1','crop2'], index_col='path')  # coordinates of each pair of crops

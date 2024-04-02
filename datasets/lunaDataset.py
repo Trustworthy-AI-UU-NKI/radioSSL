@@ -16,10 +16,10 @@ class LunaPretask(Dataset):
         self.config = config
         self.imgs = img_train
         self.train = train
-        self.transform = transform
-        self.global_transforms = global_transforms
+        self.transform = transform if transform != None else torchio.transforms.Compose([])
+        self.global_transforms = global_transforms if global_transforms != None else torchio.transforms.Compose([])
         self.local_input_enable = (config.model != 'cluster')  # Do not include local_views in dataloader for cluster_pretask (TODO: might change later)
-        self.local_transforms = local_transforms
+        self.local_transforms = local_transforms if local_transforms != None else torchio.transforms.Compose([])
         self.norm = torchio.transforms.ZNormalization()
         self.global_index = [0, 1, 2, 3, 4, 5, 6, 7]
         self.local_index = [i for i in range(48)]

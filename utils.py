@@ -195,7 +195,7 @@ def get_luna_finetune_list(ratio, path, train_fold):
     with open('train_val_txt/luna_train.txt', 'r') as f:
         for line in f:
             x_train.append(line.strip('\n'))
-    return x_train[int(len(x_train) * ratio):]
+    return x_train[:int(len(x_train) * ratio)]
 
 
 def get_luna_list(config, train_fold, valid_fold, test_fold, suffix, file_list):

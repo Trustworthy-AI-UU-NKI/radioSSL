@@ -71,16 +71,16 @@ class DataGenerator:
                                         pin_memory=True, shuffle=False, num_workers=args.workers, worker_init_fn=seed_worker, generator=generator)
         return dataloader
 
-    
     def cluster_luna_pretask(self):
         print('using the reverse_aug pretrain on luna')
         args = self.args
         dataloader = {}
         train_fold = [0, 1, 2, 3, 4, 5, 6]
         valid_fold = [7, 8, 9]
-        file_list = get_luna_pretrain_list(args.ratio)
+        pretrain_list = get_luna_pretrain_list(args.ratio)
         x_train, x_valid, _ = get_luna_list(args, train_fold, valid_fold, valid_fold, suffix='_global_',
-                                            file_list=file_list)
+                                            file_list=pretrain_list)
+        # finetune_list = get_luna_finetune_list(0.05)  # Ratio doesn't really matter because we simply use the val dataset for visualization)
         print(f'Train Images {len(x_train)}, Valid Images {len(x_valid)}')
         spatial_transforms = []  # Removed Flip and Affine transform (TODO: Maybe put them back if it doesnt affect mask alignment)
 
@@ -125,10 +125,10 @@ class DataGenerator:
                               ]
         spatial_transforms = torchio.transforms.Compose(spatial_transforms)
         local_transforms = [torchio.transforms.RandomBlur(),
-                      torchio.transforms.RandomNoise(),
-                      torchio.transforms.RandomGamma(),
-                      torchio.transforms.ZNormalization()
-                      ]
+                            torchio.transforms.RandomNoise(),
+                            torchio.transforms.RandomGamma(),
+                            torchio.transforms.ZNormalization()
+                            ]
         local_transforms = torchio.transforms.Compose(local_transforms)
         global_transforms = [torchio.transforms.RandomBlur(),
                              torchio.transforms.RandomNoise(),
@@ -140,7 +140,7 @@ class DataGenerator:
 
         train_ds = BratsPretask(args, x_train, train=True, transform=spatial_transforms,
                                      global_transforms=global_transforms, local_transforms=local_transforms)
-        valid_ds = BratsPretask(args, x_valid, train=False)
+        valid_ds = BratsFinetune(args, x_valid, train=False)
 
         generator = torch.Generator()
         generator.manual_seed(args.seed)

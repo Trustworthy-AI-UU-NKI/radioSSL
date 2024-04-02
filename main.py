@@ -18,31 +18,33 @@ warnings.filterwarnings('ignore')
 if __name__ == '__main__':
     parser = argparse.ArgumentParser(description='Self Training benchmark')
     parser.add_argument('--data', metavar='DIR', default='/home/igogou/data/LUNA16',
-                        help='path to dataset')
-    parser.add_argument('--model', metavar='MODEL', default='pcrlv2', choices=['cluster','pcrlv2','genesis','imagenet','scratch'], help='choose the model')
-    parser.add_argument('--phase', default='pretask', choices=['pretask', 'finetune', 'test'], type=str, help='pretask or finetune or test')
-    parser.add_argument('--pretrained', default='encoder', choices=['all', 'encoder', 'none'], type=str, help='all or encoder or none')
-    parser.add_argument('--finetune', default='all', choices=['all', 'decoder', 'last'], type=str, help='all or decoder or last')
-    parser.add_argument('--b', default=16, type=int, help='batch size')
-    parser.add_argument('--epochs', default=100, type=int, help='epochs to train')
-    parser.add_argument('--lr', default=1e-3, type=float, help='learning rate')
-    parser.add_argument('--output', default='None', type=str, help='output path')
-    parser.add_argument('--n', default='luna', choices=['luna', 'lits', 'brats'], type=str, help='dataset to use')
-    parser.add_argument('--d', default=3, type=int, help='3d or 2d to run')
-    parser.add_argument('--workers', default=4, type=int, help='num of workers')
-    parser.add_argument('--gpus', default='0,1,2,3', type=str, help='gpu indexs')
-    parser.add_argument('--ratio', default=0.8, type=float, help='ratio of data used for pretraining')
+                        help='Path to dataset')
+    parser.add_argument('--data_raw', metavar='DIR', default=None,
+                        help='Path to unprocessed dataset (This is needed only for the clustering pretask for visualization)')
+    parser.add_argument('--model', metavar='MODEL', default='pcrlv2', choices=['cluster','pcrlv2','genesis','imagenet','scratch'], help='Choose the model')
+    parser.add_argument('--phase', default='pretask', choices=['pretask', 'finetune', 'test'], type=str, help='Choose phase: pretask or finetune or test')
+    parser.add_argument('--pretrained', default='encoder', choices=['all', 'encoder', 'none'], type=str, help='Choose what is pretrained: all or encoder or none')
+    parser.add_argument('--finetune', default='all', choices=['all', 'decoder', 'last'], type=str, help='Choose what to finetune: all or decoder or last')
+    parser.add_argument('--b', default=16, type=int, help='Batch size')
+    parser.add_argument('--epochs', default=100, type=int, help='Epochs to train')
+    parser.add_argument('--lr', default=1e-3, type=float, help='Learning rate')
+    parser.add_argument('--output', default='None', type=str, help='Output path')
+    parser.add_argument('--n', default='luna', choices=['luna', 'lits', 'brats'], type=str, help='Dataset to use')
+    parser.add_argument('--d', default=3, type=int, help='3D or 2D to run')
+    parser.add_argument('--workers', default=4, type=int, help='Num of workers')
+    parser.add_argument('--gpus', default='0,1,2,3', type=str, help='GPU indices to use')
+    parser.add_argument('--ratio', default=0.8, type=float, help='Ratio of data used for pretraining/finetuning.')
     parser.add_argument('--momentum', default=0.9)
-    parser.add_argument('--weight', default=None, type=str)
+    parser.add_argument('--weight', default=None, type=str, help='Diretory to weights to load')
     parser.add_argument('--weight_decay', default=1e-4)
     parser.add_argument('--seed', default=1, type=int)
     parser.add_argument('--patience', default=None, type=int)
     parser.add_argument('--amp', action='store_true', default=False)
-    parser.add_argument('--skip_conn', action='store_true', default=False)
-    parser.add_argument('--k', default=10, type=int, help='number of clusters for clustering pretask')
-    parser.add_argument('--tensorboard', action='store_true', default=False)
-    parser.add_argument('--vis', action='store_true', default=False)
-    parser.add_argument('--cpu', action='store_true', default=False)
+    parser.add_argument('--skip_conn', action='store_true', default=False, help='To include skip connections in the U-Net or not. Ideally, use False for pretrain and True for finetune')
+    parser.add_argument('--k', default=10, type=int, help='Number of clusters for clustering pretask')
+    parser.add_argument('--tensorboard', action='store_true', default=False, help='To log on tensorboard or not')
+    parser.add_argument('--vis', action='store_true', default=False, help='To visualize by logging prediction images on tensorboard')
+    parser.add_argument('--cpu', action='store_true', default=False, help='To run on CPU or not')
     args = parser.parse_args()
     if not os.path.exists(args.output):
         os.makedirs(args.output)
@@ -78,7 +80,7 @@ if __name__ == '__main__':
         folder_name = None
         
         if args.phase == 'finetune':
-            cluster_k = re.search(r'_k[0-9]+_', args.weight).group(0)[1:] if args.model == 'cluster' else ''
+            cluster_k = re.search(r'_k[0-9]+_', args.weight).group(0)[1:4] if args.model == 'cluster' else ''
             sc = 'sc_' if args.skip_conn else ''
             run_name = f'{args.model}_{args.d}d_{cluster_k}{sc}pretrain_{args.pretrained}_finetune_{args.finetune}_b{args.b}_e{args.epochs}_lr{"{:f}".format(args.lr).split(".")[-1]}_r{int(args.ratio * 100)}_t{curr_time}'
             

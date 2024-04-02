@@ -103,7 +103,7 @@ def train_pcrlv2(args, data_loader, run_dir, out_channel=3, writer=None):
         if epoch % 100 == 0 or epoch == 240:
             # saving the model
             print('==> Saving...')
-            state = {'opt': args, 'state_dict': model.module.model.encoder.state_dict(),
+            state = {'opt': args, 'state_dict': model.module.model.state_dict(),
                      'optimizer': optimizer.state_dict(), 'epoch': epoch}
 
             save_file = run_dir + '.pt'

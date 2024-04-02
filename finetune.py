@@ -164,7 +164,6 @@ def train_segmentation(args, dataloader, in_channels, n_classes, run_dir, writer
                 'optimizer_state_dict': optimizer.state_dict()
             }, run_dir + ".pt")
             print("Saving model ", run_dir + ".pt\n")
-            model_final = deepcopy(model)  # Return only best version of model at the end of the function
         else:
             print("Validation loss does not decrease from {:.4f}, num_epoch_no_improvement {}\n".format(best_loss,
                                                                                                       num_epoch_no_improvement))
@@ -179,20 +178,17 @@ def train_segmentation(args, dataloader, in_channels, n_classes, run_dir, writer
 
         sys.stdout.flush()
 
-    return model_final, writer
+    return run_dir, writer
 
 
-def test_segmentation(args, dataloader, in_channels, n_classes, finetuned_model=None, writer=None):
+def test_segmentation(args, dataloader, in_channels, n_classes, writer=None):
 
     test_generator = dataloader['test']
 
-    if finetuned_model is not None:  # If model object is directly inserted
-        model = finetuned_model
-    else:  # If not, load weights from file
-        model = prepare_model(args, in_channels, n_classes)
-        model = nn.DataParallel(model, device_ids=[i for i in range(torch.cuda.device_count())])
-        if not args.cpu:
-            model = model.cuda()
+    model = prepare_model(args, in_channels, n_classes)
+    model = nn.DataParallel(model, device_ids=[i for i in range(torch.cuda.device_count())])
+    if not args.cpu:
+        model = model.cuda()
 
     criterion = get_loss(args.n)
 
@@ -277,7 +273,7 @@ def train_brats_segmentation(args, dataloader, run_dir, writer=None):
 
 
 def test_brats_segmentation(args, dataloader, finetuned_model=None, writer=None):
-    return test_segmentation(args, dataloader, 4, 3, finetuned_model, writer)
+    return test_segmentation(args, dataloader, 4, 3, writer)
 
 
 def train_lits_segmentation(args, dataloader, run_dir, writer=None):
@@ -285,4 +281,4 @@ def train_lits_segmentation(args, dataloader, run_dir, writer=None):
 
 
 def test_lits_segmentation(args, dataloader, finetuned_model=None, writer=None):
-    return test_segmentation(args, dataloader, 1, 1, finetuned_model, writer)
+    return test_segmentation(args, dataloader, 1, 1, writer)

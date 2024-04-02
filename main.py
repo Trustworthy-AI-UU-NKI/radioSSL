@@ -78,7 +78,7 @@ if __name__ == '__main__':
         folder_name = None
         
         if args.phase == 'finetune':
-            cluster_k = re.search(r'_k._', args.weight).group(0)[1:4] if args.model == 'cluster' else ''
+            cluster_k = re.search(r'_k[0-9]+_', args.weight).group(0)[1:] if args.model == 'cluster' else ''
             sc = 'sc_' if args.skip_conn else ''
             run_name = f'{args.model}_{args.d}d_{cluster_k}{sc}pretrain_{args.pretrained}_finetune_{args.finetune}_b{args.b}_e{args.epochs}_lr{"{:f}".format(args.lr).split(".")[-1]}_r{int(args.ratio * 100)}_t{curr_time}'
             
@@ -144,8 +144,9 @@ if __name__ == '__main__':
 
     # Finetuning+Testings on BraTS
     elif args.phase in 'finetune' and args.n == 'brats':
-        model, writer = train_brats_segmentation(args, data_loader, run_dir, writer=writer)
-        writer = test_brats_segmentation(args, data_loader, finetuned_model=model, writer=writer)
+        writer = train_brats_segmentation(args, data_loader, run_dir, writer=writer)
+        args.weight = run_dir  # Change weight argument from pretrained weight to finetuned weight for testing
+        writer = test_brats_segmentation(args, data_loader, writer=writer)
     
     # Testing on BraTS
     elif args.phase == 'test' and args.n == 'brats':
@@ -153,8 +154,9 @@ if __name__ == '__main__':
 
     # Finetuning+Testing on LiTS
     elif args.phase in 'finetune' and args.n == 'lits':
-        model, writer = train_lits_segmentation(args, data_loader, run_dir, writer=writer)
-        writer = test_lits_segmentation(args, data_loader, finetuned_model=model, writer=writer)
+        writer = train_lits_segmentation(args, data_loader, run_dir, writer=writer)
+        args.weight = run_dir
+        writer = test_lits_segmentation(args, data_loader, writer=writer)
 
     # Testing on LiTS
     elif args.phase == 'test' and args.n == 'lits':

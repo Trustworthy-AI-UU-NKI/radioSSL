@@ -339,8 +339,8 @@ def infinite_generator_from_one_volume(img_array, save_dir, root_dir, name):
         local_path = os.path.join(save_dir, local_name)
         np.save(global_path, crop_window)
         np.save(local_path, local_windows)
-        relative_global_path = os.path.join(relative_save_dir, global_name)
-        csv_lines.append([global_path,crop_coords1,crop_coords2])
+        relative_save_path = os.path.join(relative_save_dir, global_name)
+        csv_lines.append([relative_save_path,crop_coords1,crop_coords2])
 
     return csv_lines
 
@@ -371,7 +371,8 @@ def brats_preprocess():
 
     csv_file.close()
 
-def luna_preprocess(fold):
+
+def luna_preprocess_thread(fold):
     save_path = config.SAVE_DIR
 
     for index_subset in fold:
@@ -394,26 +395,30 @@ def luna_preprocess(fold):
             csv_file.flush()
 
         csv_file.close()
+
+
+def luna_preprocess():
+
+    # Multi-thread preprocess
+    with Pool(10) as p:
+        p.map(luna_preprocess_thread, [[0], [1], [2], [3], [4], [5], [6], [7], [8], [9]])
     
     # Combine csv files
+    save_path = config.SAVE_DIR
     final_file = open(os.path.join(save_path,f'crop_coords.csv'), 'w', newline='\n')
     writer = csv.writer(final_file)
-    files = [open(os.path.join(save_path,f'crop_coords_{index_subset}.csv'), 'r', newline='\n') for index_subset in fold]
+    files = [open(os.path.join(save_path,f'crop_coords_{i}.csv'), 'r', newline='\n') for i in range(10)]
     for file in files:
         reader = csv.reader(file)
         for row in reader:
             writer.writerow(row)
+    final_file.close()
 
-
-
-
-    
 
 # Main execution    
 if options.n == 'luna':
     # assert options.lung_max == 0.30
-    with Pool(10) as p:
-        p.map(luna_preprocess, [[0], [1], [2], [3], [4], [5], [6], [7], [8], [9]])
+    luna_preprocess()
 elif options.n == 'brats':
     # assert options.lung_max == 1
     brats_preprocess()

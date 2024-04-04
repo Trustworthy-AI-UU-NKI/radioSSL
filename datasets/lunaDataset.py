@@ -2,6 +2,7 @@ import copy
 import random
 import time
 import os
+import pandas as pd
 import numpy as np
 import torch
 from PIL import Image
@@ -32,8 +33,10 @@ class LunaPretask(Dataset):
         return len(self.imgs)
 
     def __getitem__(self, index):
-        image_name = self.imgs[index]
-        pair = np.load(image_name)
+        # Load data
+        image_path = self.imgs[index]
+        relative_image_path = os.path.join(*os.path.normpath(image_path).split(os.sep)[-2:])
+        pair = np.load(image_path)
         crop1 = pair[0]
         crop1 = np.expand_dims(crop1, axis=0)
         crop2 = pair[1]
@@ -41,7 +44,7 @@ class LunaPretask(Dataset):
         
         crop1_coords = []
         crop2_coords = []
-        if self.coords:
+        if self.config.model == 'cluster':
             crop1_coords = np.array(eval(self.coords.loc[relative_image_path]['crop1']))
             crop2_coords = np.array(eval(self.coords.loc[relative_image_path]['crop2']))
 
@@ -49,13 +52,13 @@ class LunaPretask(Dataset):
         input2 = self.transform(crop2)
         gt1 = copy.deepcopy(input1)
         gt2 = copy.deepcopy(input2)
-        input1 =self.global_transforms(input1)
+        input1 = self.global_transforms(input1)
         input2 = self.global_transforms(input2)
 
         local_inputs = []
         if self.local_input_enable:
-            locals = np.load(image_name.replace('global', 'local'))
-            for i  in range(locals.shape[0]):
+            locals = np.load(image_path.replace('global', 'local'))
+            for i in range(locals.shape[0]):
                 img = locals[i]
                 img = np.expand_dims(img, axis=0)
                 img = self.transform(img)
@@ -63,8 +66,8 @@ class LunaPretask(Dataset):
                 local_inputs.append(img)
 
         return torch.tensor(input1, dtype=torch.float), torch.tensor(input2, dtype=torch.float), \
-               torch.tensor(gt1, dtype=torch.float), \
-               torch.tensor(gt2, dtype=torch.float), crop1_coords, crop2_coords, local_inputs
+            torch.tensor(gt1, dtype=torch.float), \
+            torch.tensor(gt2, dtype=torch.float), crop1_coords, crop2_coords, local_inputs
 
     def bernstein_poly(self, i, n, t):
         """

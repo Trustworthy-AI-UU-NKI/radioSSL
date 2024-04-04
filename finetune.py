@@ -178,7 +178,7 @@ def train_segmentation(args, dataloader, in_channels, n_classes, run_dir, writer
 
         sys.stdout.flush()
 
-    return run_dir, writer
+    return writer
 
 
 def test_segmentation(args, dataloader, in_channels, n_classes, writer=None):

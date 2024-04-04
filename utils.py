@@ -91,27 +91,52 @@ def prepare_model(args, in_channels, n_class):
 
             if args.pretrained == 'encoder' or args.pretrained == 'all':
                 # Load pretrained encoder
-                first_conv_weight = state_dict['down_tr64.ops.0.conv1.weight']
-                first_conv_weight = first_conv_weight.repeat((1, in_channels, 1, 1, 1))
-                state_dict['down_tr64.ops.0.conv1.weight'] = first_conv_weight
-                pretrain_dict.update({k: v for k, v in state_dict.items() if
+                if args.d == 3:
+                    first_conv_weight = state_dict['down_tr64.ops.0.conv1.weight']
+                    first_conv_weight = first_conv_weight.repeat((1, in_channels, 1, 1, 1))
+                    state_dict['down_tr64.ops.0.conv1.weight'] = first_conv_weight
+                    pretrain_dict.update({k: v for k, v in state_dict.items() if
                                 k in model_dict and 'down_tr' in k})
+                elif args.d == 2:
+                    first_conv_weight = state_dict['encoder.conv1.weight']
+                    first_conv_weight = first_conv_weight.repeat((1, in_channels, 1, 1))
+                    state_dict['encoder.conv1.weight'] = first_conv_weight
+                    pretrain_dict.update({k: v for k, v in state_dict.items() if
+                                k in model_dict and 'encoder' in k})
+                
             
             if args.pretrained == 'all':
                 # Load pretrained decoder
-                last_conv_weight = state_dict['out_tr.final_conv.weight']
-                last_conv_weight = last_conv_weight.repeat((n_class, 1, 1, 1, 1))
-                state_dict['out_tr.final_conv.weight'] = last_conv_weight
-                last_conv_bias = state_dict['out_tr.final_conv.bias']
-                last_conv_bias = last_conv_bias.repeat((n_class))
-                state_dict['out_tr.final_conv.bias'] = last_conv_bias
-                # If skip connections are added, then do not load up_tr*.ops.0.*
-                if args.skip_conn:  
-                    pretrain_dict.update({k: v for k, v in state_dict.items() if
-                                    k in model_dict and ('up_tr' in k or 'out_tr' in k) and 'ops.0' not in k})  # Train skip conn first conv (ops.0) from scratch
-                else:
-                    pretrain_dict.update({k: v for k, v in state_dict.items() if
-                                    k in model_dict and ('up_tr' in k or 'out_tr' in k)})
+                if args.d == 3:
+                    last_conv_weight = state_dict['out_tr.final_conv.weight']
+                    last_conv_weight = last_conv_weight.repeat((n_class, 1, 1, 1, 1))
+                    state_dict['out_tr.final_conv.weight'] = last_conv_weight
+                    last_conv_bias = state_dict['out_tr.final_conv.bias']
+                    last_conv_bias = last_conv_bias.repeat((n_class))
+                    state_dict['out_tr.final_conv.bias'] = last_conv_bias
+                    # If skip connections are added, then do not load up_tr*.ops.0.*
+                    if args.skip_conn:  
+                        pretrain_dict.update({k: v for k, v in state_dict.items() if
+                                        k in model_dict and ('up_tr' in k or 'out_tr' in k) and 'ops.0' not in k})  # Train skip conn first conv (ops.0) from scratch
+                    else:
+                        pretrain_dict.update({k: v for k, v in state_dict.items() if
+                                        k in model_dict and ('up_tr' in k or 'out_tr' in k)})
+                elif args.d == 2:
+                    pass
+                    # TODO: implement
+                    # last_conv_weight = state_dict['decoder.final_conv.weight']
+                    # last_conv_weight = last_conv_weight.repeat((n_class, 1, 1, 1, 1))
+                    # state_dict['out_tr.final_conv.weight'] = last_conv_weight
+                    # last_conv_bias = state_dict['out_tr.final_conv.bias']
+                    # last_conv_bias = last_conv_bias.repeat((n_class))
+                    # state_dict['out_tr.final_conv.bias'] = last_conv_bias
+                    # # If skip connections are added, then do not load up_tr*.ops.0.*
+                    # if args.skip_conn:  
+                    #     pretrain_dict.update({k: v for k, v in state_dict.items() if
+                    #                     k in model_dict and ('up_tr' in k or 'out_tr' in k) and 'ops.0' not in k})  # Train skip conn first conv (ops.0) from scratch
+                    # else:
+                    #     pretrain_dict.update({k: v for k, v in state_dict.items() if
+                    #                     k in model_dict and ('up_tr' in k or 'out_tr' in k)})
 
             model_dict.update(pretrain_dict)
             model.load_state_dict(model_dict)

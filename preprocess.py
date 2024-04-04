@@ -182,7 +182,7 @@ def cal_iou(box1, box2):
     return iou
 
 
-q
+def crop_pair(img_array, z_align = False):
 
     while True:
         size_x, size_y, size_z = img_array.shape
@@ -320,15 +320,17 @@ q
 def infinite_generator_from_one_volume(img_array, save_dir, root_dir, name):
     split_root_dir = os.path.normpath(root_dir).split(os.sep)
     split_save_dir = os.path.normpath(save_dir).split(os.sep)
-    depth_from_root_to_data = len(split_root_dir) - len(split_save_dir)
-    relative_save_dir = os.path.join(*split_save_dir[depth_from_root_to_data:])  # Careful here, make sure dataset file structure is dataset_root/folder/folder/image
+    if split_root_dir == split_save_dir:
+        relative_save_dir = ''
+    else:
+        relative_save_dir = os.path.join(*[folder for folder in split_save_dir if folder not in split_root_dir])
 
     csv_lines = []
     
     img_array[img_array < config.hu_min] = config.hu_min
     img_array[img_array > config.hu_max] = config.hu_max
     img_array = 1.0 * (img_array - config.hu_min) / (config.hu_max - config.hu_min)
-    for num_pair in tqdm(range(config.scale), desc='Crops in image generated', leave=True):
+    for num_pair in range(config.scale):
         crop_window1, crop_window2, local_windows, crop_coords1, crop_coords2 = crop_pair(img_array, z_align=config.z_align)
         crop_window = np.stack((crop_window1, crop_window2), axis=0)
         global_name = name + '_global_' + str(num_pair) + '.npy'
@@ -393,10 +395,14 @@ def luna_preprocess(fold):
 
         csv_file.close()
     
-    # # Combine csv files
-    # csv_final_file = open(os.path.join(save_path,f'crop_coords_{index_subset}.csv'), 'w', newline='\n')
-    # csv_final_writer = csv.writer(csv_file)
-    # csv_files = [open(os.path.join(save_path,f'crop_coords_{index_subset}.csv'), 'r', newline='\n') for index_subset in fold]
+    # Combine csv files
+    final_file = open(os.path.join(save_path,f'crop_coords.csv'), 'w', newline='\n')
+    writer = csv.writer(final_file)
+    files = [open(os.path.join(save_path,f'crop_coords_{index_subset}.csv'), 'r', newline='\n') for index_subset in fold]
+    for file in files:
+        reader = csv.reader(file)
+        for row in reader:
+            writer.writerow(row)
 
 
 
@@ -405,11 +411,11 @@ def luna_preprocess(fold):
 
 # Main execution    
 if options.n == 'luna':
-    assert options.lung_max == 0.15
+    # assert options.lung_max == 0.30
     with Pool(10) as p:
         p.map(luna_preprocess, [[0], [1], [2], [3], [4], [5], [6], [7], [8], [9]])
 elif options.n == 'brats':
-    assert options.lung_max == 1
+    # assert options.lung_max == 1
     brats_preprocess()
 
     

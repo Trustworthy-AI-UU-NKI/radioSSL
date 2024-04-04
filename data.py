@@ -21,7 +21,10 @@ def get_dataloader(args):
         model = 'pcrlv2'  # Because those models and pcrlv2 use the same dataloader during finetuning (cluster has its own during pretraining)
     else:
         model = args.model
-    loader_name = model + '_' + args.n + '_' + phase
+    if args.phase == 'pretask':
+        loader_name = model + '_' + args.n + '_' + phase
+    else:
+        loader_name = args.n + '_' + phase
     dataloader = getattr(generator, loader_name)()
     return dataloader
 
@@ -30,6 +33,8 @@ class DataGenerator:
 
     def __init__(self, args):
         self.args = args
+
+    # PRETASK
 
     def pcrlv2_luna_pretask(self):
         print('using the reverse_aug pretrain on luna')
@@ -182,7 +187,61 @@ class DataGenerator:
                                         pin_memory=True, shuffle=False, num_workers=args.workers, worker_init_fn=seed_worker, generator=generator)
         return dataloader
 
-    def pcrlv2_brats_finetune(self):
+    def pcrlv2_lits_pretask(self):
+        args = self.args
+        dataloader = {}
+
+        train_path = os.path.join(args.data, 'train', 'ct')
+        valid_path = os.path.join(args.data, 'val', 'ct')
+
+        spatial_transforms = [torchio.transforms.RandomFlip(),
+                              torchio.transforms.RandomAffine(),
+                              ]
+        spatial_transforms = torchio.transforms.Compose(spatial_transforms)
+        local_transforms = [torchio.transforms.RandomBlur(),
+                            torchio.transforms.RandomNoise(),
+                            torchio.transforms.RandomGamma(),
+                            torchio.transforms.ZNormalization()
+                            ]
+        local_transforms = torchio.transforms.Compose(local_transforms)
+        global_transforms = [torchio.transforms.RandomBlur(),
+                             torchio.transforms.RandomNoise(),
+                             torchio.transforms.RandomGamma(),
+                             torchio.transforms.RandomSwap(patch_size=(8, 4, 4)),
+                             torchio.transforms.ZNormalization()
+                             ]
+        global_transforms = torchio.transforms.Compose(global_transforms)
+
+        x_train = LitsPretask(train_path, training=True, transform=spatial_transforms,
+                                     global_transforms=global_transforms, local_transforms=local_transforms)
+        x_val = LitsPretask(valid_path, training=False)  
+
+        print(f'Train Images {len(x_train)}, Valid Images {len(x_valid)}')
+        generator = torch.Generator()
+        generator.manual_seed(args.seed)
+        dataloader['train'] = DataLoader(train_ds, batch_size=self.args.b,
+                                         num_workers=self.args.workers,
+                                         worker_init_fn=seed_worker,
+                                         generator=generator,
+                                         pin_memory=True,
+                                         shuffle=True)
+        dataloader['eval'] = DataLoader(valid_ds, batch_size=self.args.b,
+                                        num_workers=self.args.workers,
+                                        worker_init_fn=seed_worker,
+                                        generator=generator,
+                                        pin_memory=True,
+                                        shuffle=False)
+        dataloader['test'] = DataLoader(test_ds, batch_size=1, num_workers=self.args.b,
+                                        worker_init_fn=seed_worker,
+                                        generator=generator,
+                                        pin_memory=True,
+                                        shuffle=False)
+        return dataloader
+ 
+
+    # FINETUNING
+
+    def brats_finetune(self):
         args = self.args
         dataloader = {}
         train_list, val_list, test_list = get_brats_list(self.args.data, self.args.ratio)
@@ -211,7 +270,7 @@ class DataGenerator:
                                         shuffle=False)
         return dataloader
 
-    def pcrlv2_luna_finetune(self):
+    def luna_finetune(self):
         luna_valid_txt = 'train_val_txt/luna_finetune_test.txt'
         luna_test_txt = 'train_val_txt/luna_finetune_valid.txt'
         # luna_train_txt = 'train_val_txt/luna_finetune_train.txt'
@@ -244,7 +303,7 @@ class DataGenerator:
         print(f"Training Nodule{len(train_ds)} Valid Nodule {len(valid_ds)}, Test Nodule {len(test_ds)}")
         return dataloader
 
-    def pcrlv2_lits_finetune(self):
+    def lits_finetune(self):
         args = self.args
         dataloader = {}
 

@@ -28,7 +28,7 @@ parser.add_option("--input_cols", dest="input_cols", help="input cols", default=
 parser.add_option("--input_deps", dest="input_deps", help="input deps", default=32, type="int")
 parser.add_option("--crop_rows", dest="crop_rows", help="crop rows", default=64, type="int")
 parser.add_option("--crop_cols", dest="crop_cols", help="crop cols", default=64, type="int")
-parser.add_option("--lung_max", dest="lung_max", help="lung max", default=0.15, type="float")
+parser.add_option("--bg_max", dest="bg_max", help="lung max", default=0.15, type="float")
 parser.add_option("--data", dest="data", help="the directory of the dataset", default='/data/LUNA16',
                   type="string")
 parser.add_option("--save", dest="save", help="the directory of processed 3D cubes",
@@ -67,12 +67,8 @@ class setup_config():
                  scale=None,
                  DATA_DIR=None,
                  SAVE_DIR=None,
-                 train_fold=[0, 1, 2, 3, 4],
-                 valid_fold=[5, 6],
-                 test_fold=[7, 8, 9],
                  len_depth=None,
-                 lung_min=0.7,
-                 lung_max=1.0,
+                 bg_max=1.0,
                  z_align = False
                  ):
         self.input_rows = input_rows
@@ -84,12 +80,8 @@ class setup_config():
         self.len_border_z = len_border_z
         self.scale = scale
         self.DATA_DIR = DATA_DIR
-        self.train_fold = train_fold
-        self.valid_fold = valid_fold
-        self.test_fold = test_fold
         self.len_depth = len_depth
-        self.lung_min = lung_min
-        self.lung_max = lung_max
+        self.bg_max = bg_max
         self.SAVE_DIR = SAVE_DIR
         self.z_align = z_align
 
@@ -111,8 +103,7 @@ config = setup_config(input_rows=options.input_rows,
                       len_border=70,
                       len_border_z=15,
                       len_depth=3,
-                      lung_min=0.7,
-                      lung_max=options.lung_max,
+                      bg_max=options.bg_max,
                       DATA_DIR=options.data,
                       SAVE_DIR=options.save,
                       z_align=options.z_align
@@ -283,10 +274,10 @@ def crop_pair(img_array, z_align = False):
         d_img2 /= (config.len_depth - 1)
         d_img2 = 1.0 - d_img2
 
-        if np.sum(d_img1) > config.lung_max * crop_cols1 * crop_deps1 * crop_rows1:
+        if np.sum(d_img1) > config.bg_max * crop_cols1 * crop_deps1 * crop_rows1:
             continue
         # print(np.sum(d_img1))
-        if np.sum(d_img2) > config.lung_max * crop_cols1 * crop_deps1 * crop_rows1:
+        if np.sum(d_img2) > config.bg_max * crop_cols1 * crop_deps1 * crop_rows1:
             continue
         # we start to crop the local windows
         x_min = min(crop_coords1[0], crop_coords2[0])
@@ -345,33 +336,6 @@ def infinite_generator_from_one_volume(img_array, save_dir, root_dir, name):
     return csv_lines
 
 
-def brats_preprocess():
-    save_path = config.SAVE_DIR
-
-    csv_file = open(os.path.join(save_path,'crop_coords.csv'), 'w', newline='\n')
-    csv_writer = csv.writer(csv_file)
-    
-    for subset in ['HGG', 'LGG']:
-        print(">> Subset {}".format(subset))
-        brats_subset_path = os.path.join(config.DATA_DIR, subset)
-        folder_list = os.listdir(os.path.join(brats_subset_path))
-        for folder in tqdm(folder_list, desc='Folders parsed'):
-            file_list = glob(os.path.join(brats_subset_path, folder, "*.nii.gz"))  # Only selects .nii.gz files (DOES NOT exclude the segmentations)
-            save_dir = os.path.join(save_path, subset, folder)
-            os.makedirs(save_dir, exist_ok=True)
-            for img_file in tqdm(file_list, desc='Images in folder parsed', leave=False):                
-                img_name = os.path.split(img_file)[-1]
-                if 'seg' not in img_name:  # Skip segmentation masks
-                    img_array = load_sitk_with_resample(img_file)
-                    img_array = sitk.GetArrayFromImage(img_array)
-                    img_array = img_array.transpose(2, 1, 0)
-                    img_csv_rows = infinite_generator_from_one_volume(img_array=img_array, save_dir=save_dir, root_dir=save_path, name=img_name[:-4])  # remove file type .mhd (4 chars)
-                    csv_writer.writerows(img_csv_rows)
-                    csv_file.flush()
-
-    csv_file.close()
-
-
 def luna_preprocess_thread(fold):
     save_path = config.SAVE_DIR
 
@@ -402,6 +366,7 @@ def luna_preprocess():
     # Multi-thread preprocess
     with Pool(10) as p:
         p.map(luna_preprocess_thread, [[0], [1], [2], [3], [4], [5], [6], [7], [8], [9]])
+    # luna_preprocess_thread([i for i in range(10)])
     
     # Combine csv files
     save_path = config.SAVE_DIR
@@ -415,13 +380,62 @@ def luna_preprocess():
     final_file.close()
 
 
+def brats_preprocess():
+    save_path = config.SAVE_DIR
+
+    csv_file = open(os.path.join(save_path,'crop_coords.csv'), 'w', newline='\n')
+    csv_writer = csv.writer(csv_file)
+    
+    for subset in ['HGG', 'LGG']:
+        print(">> Subset {}".format(subset))
+        brats_subset_path = os.path.join(config.DATA_DIR, subset)
+        folder_list = os.listdir(os.path.join(brats_subset_path))
+        for folder in tqdm(folder_list, desc='Folders parsed'):
+            file_list = glob(os.path.join(brats_subset_path, folder, "*.nii.gz"))  # Only selects .nii.gz files (DOES NOT exclude the segmentations)
+            save_dir = os.path.join(save_path, subset, folder)
+            os.makedirs(save_dir, exist_ok=True)
+            for img_file in tqdm(file_list, desc='Images in folder parsed', leave=False):                
+                img_name = os.path.split(img_file)[-1]
+                if 'seg' not in img_name:  # Skip segmentation masks
+                    img_array = load_sitk_with_resample(img_file)
+                    img_array = sitk.GetArrayFromImage(img_array)
+                    img_array = img_array.transpose(2, 1, 0)
+                    img_csv_rows = infinite_generator_from_one_volume(img_array=img_array, save_dir=save_dir, root_dir=save_path, name=img_name[:-4])  # remove file type .mhd (4 chars)
+                    csv_writer.writerows(img_csv_rows)
+                    csv_file.flush()
+
+    csv_file.close()
+
+
+def lits_preprocess():
+    save_path = config.SAVE_DIR
+
+    csv_file = open(os.path.join(save_path,'crop_coords.csv'), 'w', newline='\n')
+    csv_writer = csv.writer(csv_file)
+    
+    lits_path = os.path.join(config.DATA_DIR, 'train', 'ct')
+    file_list = glob(os.path.join(lits_path, "*.nii"))
+    save_dir = os.path.join(save_path, 'train', 'ct')
+    os.makedirs(save_dir, exist_ok=True)
+    for img_file in tqdm(file_list, desc='Images parsed', leave=False):                
+        img_name = os.path.split(img_file)[-1]
+        img_array = load_sitk_with_resample(img_file)
+        img_array = sitk.GetArrayFromImage(img_array)
+        img_array = img_array.transpose(2, 1, 0)
+        img_csv_rows = infinite_generator_from_one_volume(img_array=img_array, save_dir=save_dir, root_dir=save_path, name=img_name[:-4])  # remove file type .mhd (4 chars)
+        csv_writer.writerows(img_csv_rows)
+        csv_file.flush()
+
+    csv_file.close()
+
+
 # Main execution    
 if options.n == 'luna':
-    # assert options.lung_max == 0.30
     luna_preprocess()
 elif options.n == 'brats':
-    # assert options.lung_max == 1
     brats_preprocess()
+elif options.n == 'lits':
+    lits_preprocess()
 
     
 

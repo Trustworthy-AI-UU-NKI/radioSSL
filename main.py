@@ -148,6 +148,7 @@ if __name__ == '__main__':
     elif args.phase in 'finetune' and args.n == 'brats':
         writer = train_brats_segmentation(args, data_loader, run_dir, writer=writer)
         args.weight = run_dir + '.pt'  # Change weight argument from pretrained weight to finetuned weight for testing
+        args.phase = 'test'  # Change phase from finetune to test
         writer = test_brats_segmentation(args, data_loader, writer=writer)
     
     # Testing on BraTS
@@ -158,6 +159,7 @@ if __name__ == '__main__':
     elif args.phase in 'finetune' and args.n == 'lits':
         writer = train_lits_segmentation(args, data_loader, run_dir, writer=writer)
         args.weight = run_dir + '.pt'
+        args.phase = 'test'
         writer = test_lits_segmentation(args, data_loader, writer=writer)
 
     # Testing on LiTS

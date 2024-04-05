@@ -131,23 +131,24 @@ def train_3d(args, data_loader, run_dir, out_channel=3, writer=None):
         if not args.cpu:
             torch.cuda.empty_cache()
     
-    # Visualize grid of predictions for clustering task
-    if args.model == 'cluster' and args.n == 'brats':  # TODO: Currently only works for BraTS dataset
-        n_rows = min(10, args.epochs+1) + 1 # (+1 because we run for one extra epoch, and +1 for the first row which is the input images)
-        n_cols = min(10, args.b)
-        fig, axes = plt.subplots(n_rows, n_cols, figsize=(15, 15*(n_rows/n_cols)))
-        for i, ax in enumerate(axes.flat):
-            ax.imshow(grid_preds[i])
-            ax.axis('off')  # Turn off axis labels
-        plt.tight_layout()  # Adjust spacing between subplots
-        
-        # Save grid to buffer and then log on tensorboard
-        buf = io.BytesIO()
-        plt.savefig(buf, format='png', bbox_inches='tight', dpi=100)
-        buf.seek(0)
-        grid = PIL.Image.open(buf)
-        grid = t.pil_to_tensor(grid)
-        writer.add_image('img/val/grid', img_tensor=grid)
+        # Visualize grid of predictions for clustering task
+        if args.model == 'cluster' and args.n == 'brats':  # TODO: Currently only works for BraTS dataset
+            n_cols = min(10, args.b)
+            n_rows = len(grid_preds) // n_cols
+            
+            fig, axes = plt.subplots(n_rows, n_cols, figsize=(15, 15*(n_rows/n_cols)))
+            for i, ax in enumerate(axes.flat):
+                ax.imshow(grid_preds[i])
+                ax.axis('off')  # Turn off axis labels
+            plt.tight_layout()  # Adjust spacing between subplots
+            
+            # Save grid to buffer and then log on tensorboard
+            buf = io.BytesIO()
+            plt.savefig(buf, format='png', bbox_inches='tight', dpi=100)
+            buf.seek(0)
+            grid = PIL.Image.open(buf)
+            grid = t.pil_to_tensor(grid)
+            writer.add_image('img/val/grid', img_tensor=grid, global_step=epoch)
 
         
 def train_pcrlv2_inner(args, epoch, train_loader, model, optimizer, criterion, cosine, writer):
@@ -232,10 +233,10 @@ def train_pcrlv2_inner(args, epoch, train_loader, model, optimizer, criterion, c
         batch_time.update(time.time() - end)
         end = time.time()
 
-        if args.tensorboard:
-            if epoch == 0:  # Only on the first iteration, write model graph on tensorboard
-                model_wrapper = TraceWrapper(model)
-                writer.add_graph(model_wrapper, x1)
+        # if args.tensorboard:
+        #     if epoch == 0:  # Only on the first iteration, write model graph on tensorboard
+        #         model_wrapper = TraceWrapper(model)
+        #         writer.add_graph(model_wrapper, x1)
 
         # Print info
         if (idx + 1) % 10 == 0:

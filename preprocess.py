@@ -413,18 +413,19 @@ def lits_preprocess():
     csv_file = open(os.path.join(save_path,'crop_coords.csv'), 'w', newline='\n')
     csv_writer = csv.writer(csv_file)
     
-    lits_path = os.path.join(config.DATA_DIR, 'train', 'ct')
-    file_list = glob(os.path.join(lits_path, "*.nii"))
-    save_dir = os.path.join(save_path, 'train', 'ct')
-    os.makedirs(save_dir, exist_ok=True)
-    for img_file in tqdm(file_list, desc='Images parsed', leave=False):                
-        img_name = os.path.split(img_file)[-1]
-        img_array = load_sitk_with_resample(img_file)
-        img_array = sitk.GetArrayFromImage(img_array)
-        img_array = img_array.transpose(2, 1, 0)
-        img_csv_rows = infinite_generator_from_one_volume(img_array=img_array, save_dir=save_dir, root_dir=save_path, name=img_name[:-4])  # remove file type .mhd (4 chars)
-        csv_writer.writerows(img_csv_rows)
-        csv_file.flush()
+    for subset in ['train', 'val']:
+        lits_path = os.path.join(config.DATA_DIR, subset, 'ct')
+        file_list = glob(os.path.join(lits_path, "*.nii"))
+        save_dir = os.path.join(save_path, subset, 'ct')
+        os.makedirs(save_dir, exist_ok=True)
+        for img_file in tqdm(file_list, desc='Images parsed', leave=False):                
+            img_name = os.path.split(img_file)[-1]
+            img_array = load_sitk_with_resample(img_file)
+            img_array = sitk.GetArrayFromImage(img_array)
+            img_array = img_array.transpose(2, 1, 0)
+            img_csv_rows = infinite_generator_from_one_volume(img_array=img_array, save_dir=save_dir, root_dir=save_path, name=img_name[:-4])  # remove file type .mhd (4 chars)
+            csv_writer.writerows(img_csv_rows)
+            csv_file.flush()
 
     csv_file.close()
 

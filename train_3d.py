@@ -113,6 +113,7 @@ def train_3d(args, data_loader, run_dir, out_channel=3, writer=None):
         # VALIDATION (only for clustering task, just for visualization purposes)
 
         if args.model == 'cluster' and args.n == 'brats':  # TODO: currently only works for BraTS dataset
+            print("==> validating...")
             row_preds = val_cluster_inner(args, epoch, val_loader, model, colors)
             grid_preds.extend(row_preds)
 
@@ -354,73 +355,74 @@ def train_cluster_inner(args, epoch, train_loader, model, optimizer, criterion, 
         local_loss = 0
 
         # Plot predictions on tensorboard
-        b_idx = 0
-        if args.vis and idx==b_idx and epoch % 10 == 0:
+        with torch.no_grad():
+            b_idx = 0
+            if args.vis and idx==b_idx and epoch % 10 == 0:
 
-            # Select 2D images
-            img_idx = 0
-            m_idx = 0
-            c_idx = 0
-            in1 = x1[img_idx,m_idx,:,:,input1.size(-1)//2].unsqueeze(0)
-            in2 = x2[img_idx,m_idx,:,:,input2.size(-1)//2].unsqueeze(0)
-            pred1 = pred1[img_idx,:,:,:,pred1.size(-1)//2].argmax(dim=0).unsqueeze(0)  # Take only hard cluster assignment (argmax)
-            pred2 = pred2[img_idx,:,:,:,pred2.size(-1)//2].argmax(dim=0).unsqueeze(0)
-            gt1 = gt1[img_idx,:,:,:,gt1.size(-1)//2].argmax(dim=0).unsqueeze(0)
-            gt2 = gt2[img_idx,:,:,:,gt2.size(-1)//2].argmax(dim=0).unsqueeze(0)
+                # Select 2D images
+                img_idx = 0
+                m_idx = 0
+                c_idx = 0
+                in1 = x1[img_idx,m_idx,:,:,input1.size(-1)//2].unsqueeze(0)
+                in2 = x2[img_idx,m_idx,:,:,input2.size(-1)//2].unsqueeze(0)
+                pred1 = pred1[img_idx,:,:,:,pred1.size(-1)//2].argmax(dim=0).unsqueeze(0)  # Take only hard cluster assignment (argmax)
+                pred2 = pred2[img_idx,:,:,:,pred2.size(-1)//2].argmax(dim=0).unsqueeze(0)
+                gt1 = gt1[img_idx,:,:,:,gt1.size(-1)//2].argmax(dim=0).unsqueeze(0)
+                gt2 = gt2[img_idx,:,:,:,gt2.size(-1)//2].argmax(dim=0).unsqueeze(0)
 
-            # Min-max norm input images
-            in1 = (in1 - in1.min())/(in1.max() - in1.min())
-            in2 = (in2 - in2.min())/(in2.max() - in2.min())
+                # Min-max norm input images
+                in1 = (in1 - in1.min())/(in1.max() - in1.min())
+                in2 = (in2 - in2.min())/(in2.max() - in2.min())
 
-            # Interpolate cluster masks to original input shape
-            pred1 = f.interpolate(pred1.float().unsqueeze(0), size=(H,W)).squeeze(0)
-            pred2 = f.interpolate(pred2.float().unsqueeze(0), size=(H,W)).squeeze(0)
-            gt1 = f.interpolate(gt1.float().unsqueeze(0), size=(H,W)).squeeze(0)
-            gt2 = f.interpolate(gt2.float().unsqueeze(0), size=(H,W)).squeeze(0)
+                # Interpolate cluster masks to original input shape
+                pred1 = f.interpolate(pred1.float().unsqueeze(0), size=(H,W)).squeeze(0)
+                pred2 = f.interpolate(pred2.float().unsqueeze(0), size=(H,W)).squeeze(0)
+                gt1 = f.interpolate(gt1.float().unsqueeze(0), size=(H,W)).squeeze(0)
+                gt2 = f.interpolate(gt2.float().unsqueeze(0), size=(H,W)).squeeze(0)
 
-            # Send to cpu
-            in1 = in1.cpu().detach()
-            in2 = in2.cpu().detach()
-            pred1 = pred1.cpu().detach()
-            pred2 = pred2.cpu().detach()
-            gt1 = gt1.cpu().detach()
-            gt2 = gt2.cpu().detach()
+                # Send to cpu
+                in1 = in1.cpu().detach()
+                in2 = in2.cpu().detach()
+                pred1 = pred1.cpu().detach()
+                pred2 = pred2.cpu().detach()
+                gt1 = gt1.cpu().detach()
+                gt2 = gt2.cpu().detach()
 
-            # Give color to each cluster in cluster masks
-            pred1 = pred1.repeat((3,1,1)).permute(1,2,0)  # Convert to RGB and move channel dim to the end
-            pred2 = pred2.repeat((3,1,1)).permute(1,2,0)
-            gt1 = gt1.repeat((3,1,1)).permute(1,2,0)
-            gt2 = gt2.repeat((3,1,1)).permute(1,2,0)
-            for i in range(colors.shape[0]):
-                pred1[pred1[:,:,0] == i] = colors[i]
-                pred2[pred2[:,:,0] == i] = colors[i]
-                gt1[gt1[:,:,0] == i] = colors[i]
-                gt2[gt2[:,:,0] == i] = colors[i]
-            pred1 = pred1.permute(2,1,0)
-            pred2 = pred2.permute(2,1,0)
-            gt1 = gt1.permute(2,1,0)
-            gt2 = gt2.permute(2,1,0)
+                # Give color to each cluster in cluster masks
+                pred1 = pred1.repeat((3,1,1)).permute(1,2,0)  # Convert to RGB and move channel dim to the end
+                pred2 = pred2.repeat((3,1,1)).permute(1,2,0)
+                gt1 = gt1.repeat((3,1,1)).permute(1,2,0)
+                gt2 = gt2.repeat((3,1,1)).permute(1,2,0)
+                for i in range(colors.shape[0]):
+                    pred1[pred1[:,:,0] == i] = colors[i]
+                    pred2[pred2[:,:,0] == i] = colors[i]
+                    gt1[gt1[:,:,0] == i] = colors[i]
+                    gt2[gt2[:,:,0] == i] = colors[i]
+                pred1 = pred1.permute(2,1,0)
+                pred2 = pred2.permute(2,1,0)
+                gt1 = gt1.permute(2,1,0)
+                gt2 = gt2.permute(2,1,0)
 
-            # Pad images for better visualization                
-            in1 = f.pad(in1.unsqueeze(0),(2,1,2,2),value=1)
-            in2 = f.pad(in2.unsqueeze(0),(1,2,2,2),value=1)
-            pred1 = f.pad(pred1.unsqueeze(0),(2,1,2,2),value=1)
-            pred2 = f.pad(pred2.unsqueeze(0),(1,2,2,2),value=1)
-            gt1 = f.pad(gt1.unsqueeze(0),(2,1,2,2),value=1)
-            gt2 = f.pad(gt2.unsqueeze(0),(1,2,2,2),value=1)
+                # Pad images for better visualization                
+                in1 = f.pad(in1.unsqueeze(0),(2,1,2,2),value=1)
+                in2 = f.pad(in2.unsqueeze(0),(1,2,2,2),value=1)
+                pred1 = f.pad(pred1.unsqueeze(0),(2,1,2,2),value=1)
+                pred2 = f.pad(pred2.unsqueeze(0),(1,2,2,2),value=1)
+                gt1 = f.pad(gt1.unsqueeze(0),(2,1,2,2),value=1)
+                gt2 = f.pad(gt2.unsqueeze(0),(1,2,2,2),value=1)
 
-            # Combine crops and save in tensorboard
-            in_img = torch.cat((in1,in2),dim=3).squeeze(0).cpu().detach().numpy()
-            pred_img = torch.cat((pred1,pred2),dim=3).squeeze(0).cpu().detach().numpy()
-            gt_img = torch.cat((gt1,gt2),dim=3).squeeze(0).cpu().detach().numpy()
+                # Combine crops and save in tensorboard
+                in_img = torch.cat((in1,in2),dim=3).squeeze(0).cpu().detach().numpy()
+                pred_img = torch.cat((pred1,pred2),dim=3).squeeze(0).cpu().detach().numpy()
+                gt_img = torch.cat((gt1,gt2),dim=3).squeeze(0).cpu().detach().numpy()
 
-            in_img_name = 'img/train/raw' # f'b{b_idx}_img{img_idx}_slc{slc_idx}_raw'
-            pred_img_name = 'img/train/pred' # f'b{b_idx}_img{img_idx}_slc{slc_idx}_pred'
-            gt_img_name = 'img/train/gt' # f'b{b_idx}_img{img_idx}_slc{slc_idx}_gt'
+                in_img_name = 'img/train/raw' # f'b{b_idx}_img{img_idx}_slc{slc_idx}_raw'
+                pred_img_name = 'img/train/pred' # f'b{b_idx}_img{img_idx}_slc{slc_idx}_pred'
+                gt_img_name = 'img/train/gt' # f'b{b_idx}_img{img_idx}_slc{slc_idx}_gt'
 
-            writer.add_image(in_img_name, img_tensor=in_img, global_step=epoch, dataformats='CHW')
-            writer.add_image(pred_img_name, img_tensor=pred_img, global_step=epoch, dataformats='CHW')   
-            writer.add_image(gt_img_name, img_tensor=gt_img, global_step=epoch, dataformats='CHW')
+                writer.add_image(in_img_name, img_tensor=in_img, global_step=epoch, dataformats='CHW')
+                writer.add_image(pred_img_name, img_tensor=pred_img, global_step=epoch, dataformats='CHW')   
+                writer.add_image(gt_img_name, img_tensor=gt_img, global_step=epoch, dataformats='CHW')
 
         # Total Loss
         # TODO: add the other losses later
@@ -436,8 +438,7 @@ def train_cluster_inner(args, epoch, train_loader, model, optimizer, criterion, 
                 scaled_loss.backward()
         else:
             loss.backward()
-        # clip_value = 10
-        # torch.nn.utils.clip_grad_norm_(model.parameters(), clip_value)
+
         optimizer.step()
 
         # Meters
@@ -450,10 +451,10 @@ def train_cluster_inner(args, epoch, train_loader, model, optimizer, criterion, 
         batch_time.update(time.time() - end)
         end = time.time()
 
-        if args.tensorboard:
-            if epoch == 0:  # Only on the first iteration, write model graph on tensorboard
-                model_wrapper = TraceWrapper(model)
-                writer.add_graph(model_wrapper, x1)
+        # if args.tensorboard:
+        #     if epoch == 0:  # Only on the first iteration, write model graph on tensorboard
+        #         model_wrapper = TraceWrapper(model)
+        #         writer.add_graph(model_wrapper, x1)
 
         # print info
         if (idx + 1) % 10 == 0:

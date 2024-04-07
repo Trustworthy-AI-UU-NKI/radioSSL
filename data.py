@@ -33,6 +33,26 @@ class DataGenerator:
 
     def __init__(self, args):
         self.args = args
+        
+        self.pcrlv2_spatial_transforms = torchio.transforms.Compose([torchio.transforms.RandomFlip(),
+                              torchio.transforms.RandomAffine(),
+                              ])
+        self.pcrlv2_local_transforms = torchio.transforms.Compose([torchio.transforms.RandomBlur(),
+                            torchio.transforms.RandomNoise(),
+                            torchio.transforms.RandomGamma(),
+                            torchio.transforms.ZNormalization()
+                            ])
+        self.pcrlv2_global_transforms = torchio.transforms.Compose([torchio.transforms.RandomBlur(),
+                             torchio.transforms.RandomNoise(),
+                             torchio.transforms.RandomGamma(),
+                             torchio.transforms.RandomSwap(patch_size=(8, 4, 4)),
+                             torchio.transforms.ZNormalization()
+                             ])
+
+        self.cluster_spatial_transforms = torchio.transforms.Compose([])
+        self.cluster_local_transforms = torchio.transforms.Compose([])
+        self.cluster_global_transforms = torchio.transforms.Compose([])
+
 
     # PRETASK
 
@@ -46,30 +66,14 @@ class DataGenerator:
         x_train, x_valid, _ = get_luna_list(args, train_fold, valid_fold, valid_fold, suffix='_global_',
                                             file_list=file_list)
         print(f'Train Images {len(x_train)}, Valid Images {len(x_valid)}')
-        spatial_transforms = [torchio.transforms.RandomFlip(),
-                              torchio.transforms.RandomAffine(),
-                              ]
-        spatial_transforms = torchio.transforms.Compose(spatial_transforms)
-        local_transforms = [torchio.transforms.RandomBlur(),
-                      torchio.transforms.RandomNoise(),
-                      torchio.transforms.RandomGamma(),
-                      torchio.transforms.ZNormalization()
-                      ]
-        local_transforms = torchio.transforms.Compose(local_transforms)
-        global_transforms = [torchio.transforms.RandomBlur(),
-                             torchio.transforms.RandomNoise(),
-                             torchio.transforms.RandomGamma(),
-                             torchio.transforms.RandomSwap(patch_size=(8, 4, 4)),
-                             torchio.transforms.ZNormalization()
-                             ]
-        global_transforms = torchio.transforms.Compose(global_transforms)
 
-        train_ds = LunaPretask(args, x_train, train=True, transform=spatial_transforms,
-                                     global_transforms=global_transforms, local_transforms=local_transforms)
+        train_ds = LunaPretask(args, x_train, train=True, transform=self.pcrlv2_spatial_transforms,
+                                     global_transforms=self.pcrlv2_global_transforms, local_transforms=self.pcrlv2_local_transforms)
         valid_ds = LunaPretask(args, x_valid, train=False)
 
         generator = torch.Generator()
         generator.manual_seed(args.seed)
+
         dataloader['train'] = DataLoader(train_ds, batch_size=args.b,
                                          pin_memory=True, shuffle=True, num_workers=args.workers, worker_init_fn=seed_worker, generator=generator)
         dataloader['eval'] = DataLoader(valid_ds, batch_size=args.b,
@@ -87,31 +91,14 @@ class DataGenerator:
                                             file_list=pretrain_list)
         # finetune_list = get_luna_finetune_list(0.05)  # Ratio doesn't really matter because we simply use the val dataset for visualization)
         print(f'Train Images {len(x_train)}, Valid Images {len(x_valid)}')
-        spatial_transforms = []  # Removed Flip and Affine transform (TODO: Maybe put them back if it doesnt affect mask alignment)
 
-        spatial_transforms = torchio.transforms.Compose(spatial_transforms)
-        local_transforms = [
-                    #   torchio.transforms.RandomBlur(),
-                    #   torchio.transforms.RandomNoise(),
-                    #   torchio.transforms.RandomGamma(),
-                    #   torchio.transforms.ZNormalization()
-                      ]
-        local_transforms = torchio.transforms.Compose(local_transforms)
-        global_transforms = [
-                            #  torchio.transforms.RandomBlur(),
-                            #  torchio.transforms.RandomNoise(),
-                            #  torchio.transforms.RandomGamma(),
-                            #  torchio.transforms.RandomSwap(patch_size=(8, 4, 4)),
-                            #  torchio.transforms.ZNormalization()
-                             ]
-        global_transforms = torchio.transforms.Compose(global_transforms)
-
-        train_ds = LunaPretask(args, x_train, train=True, transform=spatial_transforms,
-                                     global_transforms=global_transforms, local_transforms=local_transforms)
+        train_ds = LunaPretask(args, x_train, train=True, transform=self.cluster_spatial_transforms,
+                                     global_transforms=self.cluster_global_transforms, local_transforms=self.cluster_local_transforms)
         valid_ds = LunaPretask(args, x_valid, train=False)
 
         generator = torch.Generator()
         generator.manual_seed(args.seed)
+
         dataloader['train'] = DataLoader(train_ds, batch_size=args.b,
                                          pin_memory=True, shuffle=True, num_workers=args.workers, worker_init_fn=seed_worker, generator=generator)
         dataloader['eval'] = DataLoader(valid_ds, batch_size=args.b,
@@ -125,27 +112,10 @@ class DataGenerator:
 
         x_train, x_valid, _ = get_brats_pretrain_list(self.args.data, self.args.ratio, suffix='_global_')
         print(f'Train Images {len(x_train)}, Valid Images {len(x_valid)}')
-        spatial_transforms = [torchio.transforms.RandomFlip(),
-                              torchio.transforms.RandomAffine(),
-                              ]
-        spatial_transforms = torchio.transforms.Compose(spatial_transforms)
-        local_transforms = [torchio.transforms.RandomBlur(),
-                            torchio.transforms.RandomNoise(),
-                            torchio.transforms.RandomGamma(),
-                            torchio.transforms.ZNormalization()
-                            ]
-        local_transforms = torchio.transforms.Compose(local_transforms)
-        global_transforms = [torchio.transforms.RandomBlur(),
-                             torchio.transforms.RandomNoise(),
-                             torchio.transforms.RandomGamma(),
-                             torchio.transforms.RandomSwap(patch_size=(8, 4, 4)),
-                             torchio.transforms.ZNormalization()
-                             ]
-        global_transforms = torchio.transforms.Compose(global_transforms)
 
-        train_ds = BratsPretask(args, x_train, train=True, transform=spatial_transforms,
-                                     global_transforms=global_transforms, local_transforms=local_transforms)
-        valid_ds = BratsFinetune(args, x_valid, train=False)
+        train_ds = BratsPretask(args, x_train, train=True, transform=self.pcrlv2_spatial_transforms,
+                                     global_transforms=self.pcrlv2_global_transforms, local_transforms=self.pcrlv2_local_transforms)
+        valid_ds = BratsPretask(args, x_valid, train=False)
 
         generator = torch.Generator()
         generator.manual_seed(args.seed)
@@ -163,19 +133,9 @@ class DataGenerator:
         
         x_train, x_valid, _ = get_brats_pretrain_list(self.args.data, self.args.ratio, suffix='_global_')
         print(f'Train Images {len(x_train)}, Valid Images {len(x_valid)}')
-        spatial_transforms = []  # Removed Flip and Affine transform (TODO: Maybe put them back if it doesnt affect mask alignment)
-        spatial_transforms = torchio.transforms.Compose(spatial_transforms)
-        local_transforms = [
-                        #    torchio.transforms.RandomNoise(std=0.01) # Removed destructive transforms and Z-norm (TODO: Maybe put them back once we know it works)
-                        ]  
-        local_transforms = torchio.transforms.Compose(local_transforms)
-        global_transforms = [
-                            # torchio.transforms.RandomNoise(std=0.01), # TODO: Maybe put them back once we know it works
-                        ]  
-        global_transforms = torchio.transforms.Compose(global_transforms)
 
-        train_ds = BratsPretask(args, x_train, train=True, transform=spatial_transforms,
-                                     global_transforms=global_transforms, local_transforms=local_transforms)
+        train_ds = BratsPretask(args, x_train, train=True, transform=self.cluster_spatial_transforms,
+                                     global_transforms=self.cluster_global_transforms, local_transforms=self.cluster_local_transforms)
         valid_ds = BratsPretask(args, x_valid, train=False)
 
         generator = torch.Generator()
@@ -194,48 +154,47 @@ class DataGenerator:
         train_path = os.path.join(args.data, 'train', 'ct')
         valid_path = os.path.join(args.data, 'val', 'ct')
 
-        spatial_transforms = [torchio.transforms.RandomFlip(),
-                              torchio.transforms.RandomAffine(),
-                              ]
-        spatial_transforms = torchio.transforms.Compose(spatial_transforms)
-        local_transforms = [torchio.transforms.RandomBlur(),
-                            torchio.transforms.RandomNoise(),
-                            torchio.transforms.RandomGamma(),
-                            torchio.transforms.ZNormalization()
-                            ]
-        local_transforms = torchio.transforms.Compose(local_transforms)
-        global_transforms = [torchio.transforms.RandomBlur(),
-                             torchio.transforms.RandomNoise(),
-                             torchio.transforms.RandomGamma(),
-                             torchio.transforms.RandomSwap(patch_size=(8, 4, 4)),
-                             torchio.transforms.ZNormalization()
-                             ]
-        global_transforms = torchio.transforms.Compose(global_transforms)
-
-        x_train = LitsPretask(train_path, training=True, transform=spatial_transforms,
-                                     global_transforms=global_transforms, local_transforms=local_transforms)
-        x_val = LitsPretask(valid_path, training=False)  
-
+        x_train = [os.path.join(train_path,x) for x in os.listdir(train_path) if 'global' in x]
+        x_valid = [os.path.join(valid_path,x) for x in os.listdir(valid_path) if 'global' in x]
         print(f'Train Images {len(x_train)}, Valid Images {len(x_valid)}')
+
+        train_ds = LitsPretask(args, x_train, train=True, transform=self.pcrlv2_spatial_transforms,
+                                     global_transforms=self.pcrlv2_global_transforms, local_transforms=self.pcrlv2_local_transforms)
+        valid_ds = LitsPretask(args, x_valid, train=False) 
+
         generator = torch.Generator()
         generator.manual_seed(args.seed)
-        dataloader['train'] = DataLoader(train_ds, batch_size=self.args.b,
-                                         num_workers=self.args.workers,
-                                         worker_init_fn=seed_worker,
-                                         generator=generator,
-                                         pin_memory=True,
-                                         shuffle=True)
-        dataloader['eval'] = DataLoader(valid_ds, batch_size=self.args.b,
-                                        num_workers=self.args.workers,
-                                        worker_init_fn=seed_worker,
-                                        generator=generator,
-                                        pin_memory=True,
-                                        shuffle=False)
-        dataloader['test'] = DataLoader(test_ds, batch_size=1, num_workers=self.args.b,
-                                        worker_init_fn=seed_worker,
-                                        generator=generator,
-                                        pin_memory=True,
-                                        shuffle=False)
+
+        dataloader['train'] = DataLoader(train_ds, batch_size=args.b,
+                                         pin_memory=True, shuffle=True, num_workers=args.workers, worker_init_fn=seed_worker, generator=generator)
+        dataloader['eval'] = DataLoader(valid_ds, batch_size=args.b,
+                                        pin_memory=True, shuffle=False, num_workers=args.workers, worker_init_fn=seed_worker, generator=generator)
+        return dataloader
+
+    def cluster_lits_pretask(self):
+        args = self.args
+        dataloader = {}
+
+        train_path = os.path.join(args.data, 'train', 'ct')
+        valid_path = os.path.join(args.data, 'train', 'ct')  # TODO: change to val when ready
+
+        x_train = [os.path.join(train_path,x) for x in os.listdir(train_path) if 'global' in x]
+        x_valid = [os.path.join(valid_path,x) for x in os.listdir(valid_path) if 'global' in x]
+        print(f'Train Images {len(x_train)}, Valid Images {len(x_valid)}')
+
+        train_ds = LitsPretask(args, x_train, train=True, transform=self.cluster_spatial_transforms,
+                                     global_transforms=self.cluster_global_transforms, local_transforms=self.cluster_local_transforms)
+        valid_ds = LitsPretask(args, x_valid, train=False)  
+
+        print(f'Train Images {len(x_train)}, Valid Images {len(x_valid)}')
+
+        generator = torch.Generator()
+        generator.manual_seed(args.seed)
+
+        dataloader['train'] = DataLoader(train_ds, batch_size=args.b,
+                                         pin_memory=True, shuffle=True, num_workers=args.workers, worker_init_fn=seed_worker, generator=generator)
+        dataloader['eval'] = DataLoader(valid_ds, batch_size=args.b,
+                                        pin_memory=True, shuffle=False, num_workers=args.workers, worker_init_fn=seed_worker, generator=generator)
         return dataloader
  
 
@@ -310,9 +269,9 @@ class DataGenerator:
         train_path = os.path.join(args.data, 'train')
         valid_path = os.path.join(args.data, 'val')
 
-        train_ds = LitsFineTune(os.path.join(train_path, 'ct'), os.path.join(train_path, 'seg'), training=True, ratio=self.args.ratio)
-        valid_ds = LitsFineTune(os.path.join(valid_path, 'ct'), os.path.join(valid_path, 'seg'), training=False)  
-        test_ds = LitsFineTune(os.path.join(valid_path, 'ct'), os.path.join(valid_path, 'seg'), training=False) # Use val==test
+        train_ds = LitsFineTune(os.path.join(train_path, 'ct'), os.path.join(train_path, 'seg'), train=True, ratio=self.args.ratio)
+        valid_ds = LitsFineTune(os.path.join(valid_path, 'ct'), os.path.join(valid_path, 'seg'), train=False)  
+        test_ds = LitsFineTune(os.path.join(valid_path, 'ct'), os.path.join(valid_path, 'seg'), train=False) # Use val==test
 
         generator = torch.Generator()
         generator.manual_seed(args.seed)

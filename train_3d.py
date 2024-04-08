@@ -58,7 +58,7 @@ def train_3d(args, data_loader, run_dir, out_channel=3, writer=None):
     if args.model == 'cluster':
         # Generate colors for cluster masks
         palette = sns.color_palette(palette='bright', n_colors=args.k)
-        colors = torch.Tensor([list(color) for color in palette])
+        colors = torch.Tensor([list(color) for color in palette]).cpu()  # cpu because we apply it on a detached tensor later
 
     torch.backends.cudnn.deterministic = True
 
@@ -530,9 +530,9 @@ def val_cluster_inner(args, epoch, val_loader, model, colors):
                     pred_i = pred[img_idx,:,:,:,NPD//2].argmax(dim=0).unsqueeze(0)  # Take only hard cluster assignment (argmax)
                     pred_i = f.interpolate(pred_i.float().unsqueeze(0), size=(H,W)).squeeze(0)  # Interpolate cluster masks to original input shape
                     pred_i = pred_i.repeat((3,1,1)).permute(1,2,0)  # Convert to RGB and move channel dim to the end
+                    pred_i = pred_i.cpu().detach()  # Send to cpu
                     for i in range(colors.shape[0]):  # Give color to each cluster in cluster masks
                         pred_i[pred_i[:,:,0] == i] = colors[i]
-                    pred_i = pred_i.cpu().detach()
                     grid_preds.append(pred_i)
 
     return grid_preds

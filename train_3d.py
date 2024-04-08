@@ -110,19 +110,40 @@ def train_3d(args, data_loader, run_dir, out_channel=3, writer=None):
         if args.tensorboard:
             writer.add_scalar('loss/train', total_loss, epoch)  # Write train loss on tensorboard
 
+
         # VALIDATION (only for clustering task, just for visualization purposes)
 
-        if args.model == 'cluster' and args.n == 'brats':  # TODO: currently only works for BraTS dataset
+        n_epochs = min(10,args.epochs+1) # The number of epochs to sample from for the grid (10 or all epochs if total less than 10) (+1 because we always run for one extra epoch)
+        
+        if args.vis and epoch % ((args.epochs + 1) // n_epochs) == 0 and args.model == 'cluster' and args.n == 'brats':  # TODO: currently only works for BraTS Clustering
             print("==> validating...")
+            
+            # Validate
             row_preds = val_cluster_inner(args, epoch, val_loader, model, colors)
             grid_preds.extend(row_preds)
+
+            # Plot grid of predictions for sampled epochs up to now
+            n_cols = min(10,args.b)
+            n_rows = len(grid_preds) // n_cols
+            fig, axes = plt.subplots(n_rows, n_cols, figsize=(15, 15*(n_rows/n_cols)))
+            for i, ax in enumerate(axes.flat):
+                ax.imshow(grid_preds[i])
+                ax.axis('off')  # Turn off axis labels
+            plt.tight_layout()  # Adjust spacing between subplots
+
+            # Save grid to buffer and then log on tensorboard
+            buf = io.BytesIO()
+            plt.savefig(buf, format='png', bbox_inches='tight', dpi=100)
+            buf.seek(0)
+            grid = PIL.Image.open(buf)
+            grid = t.pil_to_tensor(grid)
+            writer.add_image('img/val/grid', img_tensor=grid, global_step=epoch)
 
         # Save model
         if epoch % 100 == 0 or epoch == 240:
             print('==> Saving...')
             state = {'opt': args, 'state_dict': model.module.state_dict(),
                      'optimizer': optimizer.state_dict(), 'epoch': epoch}
-
             save_file = run_dir + '.pt'
             torch.save(state, save_file)
 
@@ -131,25 +152,6 @@ def train_3d(args, data_loader, run_dir, out_channel=3, writer=None):
 
         if not args.cpu:
             torch.cuda.empty_cache()
-    
-        # Visualize grid of predictions for clustering task
-        if args.model == 'cluster' and args.n == 'brats':  # TODO: Currently only works for BraTS dataset
-            n_cols = min(10, args.b)
-            n_rows = len(grid_preds) // n_cols
-            
-            fig, axes = plt.subplots(n_rows, n_cols, figsize=(15, 15*(n_rows/n_cols)))
-            for i, ax in enumerate(axes.flat):
-                ax.imshow(grid_preds[i])
-                ax.axis('off')  # Turn off axis labels
-            plt.tight_layout()  # Adjust spacing between subplots
-            
-            # Save grid to buffer and then log on tensorboard
-            buf = io.BytesIO()
-            plt.savefig(buf, format='png', bbox_inches='tight', dpi=100)
-            buf.seek(0)
-            grid = PIL.Image.open(buf)
-            grid = t.pil_to_tensor(grid)
-            writer.add_image('img/val/grid', img_tensor=grid, global_step=epoch)
 
         
 def train_pcrlv2_inner(args, epoch, train_loader, model, optimizer, criterion, cosine, writer):
@@ -511,29 +513,25 @@ def val_cluster_inner(args, epoch, val_loader, model, colors):
             NPD = D//PD  # Num patches at Z
             pred = pred.permute(0,2,1).reshape((B,K,NPH,NPW,NPD))
 
-            # Plot prediction grid on tensorboard
-            n_epochs = min(10,args.epochs+1) # The number of epochs to sample from for the grid (10 or all epochs if total less than 10) (+1 because we always run for one extra epoch)
+            # Gather predictions to visualize on grid
             n_images = min(10,args.b)  # The number of images to sample from for the grid (10 or all images if total less than 10)
-            if args.vis and epoch % (args.epochs + 1 // n_epochs) == 0: 
-               
-                # If epoch 0, then also add the input images as the first row of the grid
-                if epoch == 0:  
-                    for img_idx in range(n_images):
-                        x_i = x[img_idx,0,:,:,D//2]                   
-                        x_i = (x_i - x_i.min())/(x_i.max() - x_i.min())  # Min-max norm input images
-                        x_i = x_i.repeat((3,1,1)).permute(1,2,0)  # Convert to RGB and move channel dim to the end
-                        x_i = x_i.cpu().detach()
-                        grid_preds.append(x_i)
-                
-                 # Next, add the predictions for each image at the current epoch
-                for img_idx in range(n_images): 
-                    pred_i = pred[img_idx,:,:,:,NPD//2].argmax(dim=0).unsqueeze(0)  # Take only hard cluster assignment (argmax)
-                    pred_i = f.interpolate(pred_i.float().unsqueeze(0), size=(H,W)).squeeze(0)  # Interpolate cluster masks to original input shape
-                    pred_i = pred_i.repeat((3,1,1)).permute(1,2,0)  # Convert to RGB and move channel dim to the end
-                    pred_i = pred_i.cpu().detach()  # Send to cpu
-                    for i in range(colors.shape[0]):  # Give color to each cluster in cluster masks
-                        pred_i[pred_i[:,:,0] == i] = colors[i]
-                    grid_preds.append(pred_i)
+            # If epoch 0, add the input images as the first row of the grid
+            if epoch == 0:  
+                for img_idx in range(n_images):
+                    x_i = x[img_idx,0,:,:,D//2]                   
+                    x_i = (x_i - x_i.min())/(x_i.max() - x_i.min())  # Min-max norm input images
+                    x_i = x_i.repeat((3,1,1)).permute(1,2,0)  # Convert to RGB and move channel dim to the end
+                    x_i = x_i.cpu().detach()
+                    grid_preds.append(x_i)
+            # Next, add the predictions for each image at the current epoch as the next row
+            for img_idx in range(n_images): 
+                pred_i = pred[img_idx,:,:,:,NPD//2].argmax(dim=0).unsqueeze(0)  # Take only hard cluster assignment (argmax)
+                pred_i = f.interpolate(pred_i.float().unsqueeze(0), size=(H,W)).squeeze(0)  # Interpolate cluster masks to original input shape
+                pred_i = pred_i.repeat((3,1,1)).permute(1,2,0)  # Convert to RGB and move channel dim to the end
+                for i in range(colors.shape[0]):  # Give color to each cluster in cluster masks
+                    pred_i[pred_i[:,:,0] == i] = colors[i]
+                pred_i = pred_i.cpu().detach()
+                grid_preds.append(pred_i)
 
     return grid_preds
 

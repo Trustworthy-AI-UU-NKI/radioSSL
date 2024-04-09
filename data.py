@@ -176,7 +176,7 @@ class DataGenerator:
         dataloader = {}
 
         train_path = os.path.join(args.data, 'train', 'ct')
-        valid_path = os.path.join(args.data, 'train', 'ct')  # TODO: change to val when ready
+        valid_path = os.path.join(args.data, 'val', 'ct')
 
         x_train = [os.path.join(train_path,x) for x in os.listdir(train_path) if 'global' in x]
         x_valid = [os.path.join(valid_path,x) for x in os.listdir(valid_path) if 'global' in x]
@@ -205,18 +205,19 @@ class DataGenerator:
         dataloader = {}
         train_list, val_list, test_list = get_brats_list(self.args.data, self.args.ratio)
         train_ds = BratsFineTune(train_list, train=True)
-        val_ds = BratsFineTune(val_list, train=False)
+        valid_ds = BratsFineTune(val_list, train=False)
         test_ds = BratsFineTune(test_list, train=False)
 
         generator = torch.Generator()
         generator.manual_seed(args.seed)
+
         dataloader['train'] = DataLoader(train_ds, batch_size=self.args.b,
                                          num_workers=self.args.workers,
                                          worker_init_fn=seed_worker,
                                          generator=generator,
                                          pin_memory=True,
                                          shuffle=True)
-        dataloader['eval'] = DataLoader(val_ds, batch_size=self.args.b,
+        dataloader['eval'] = DataLoader(valid_ds, batch_size=self.args.b,
                                         num_workers=self.args.workers,
                                         worker_init_fn=seed_worker,
                                         generator=generator,
@@ -275,6 +276,7 @@ class DataGenerator:
 
         generator = torch.Generator()
         generator.manual_seed(args.seed)
+
         dataloader['train'] = DataLoader(train_ds, batch_size=self.args.b,
                                          num_workers=self.args.workers,
                                          worker_init_fn=seed_worker,

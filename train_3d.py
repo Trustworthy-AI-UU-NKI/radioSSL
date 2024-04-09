@@ -113,9 +113,12 @@ def train_3d(args, data_loader, run_dir, out_channel=3, writer=None):
 
         # VALIDATION (only for clustering task, just for visualization purposes)
 
-        n_epochs = min(10,args.epochs+1) # The number of epochs to sample from for the grid (10 or all epochs if total less than 10) (+1 because we always run for one extra epoch)
+        n_epochs = min(10,args.epochs+1) # The number of epochs to sample for the grid (10 or all epochs if total less than 10) (+1 because we always run for one extra epoch)
         
-        if args.vis and epoch % ((args.epochs + 1) // n_epochs) == 0 and args.model == 'cluster' and args.n == 'brats':  # TODO: currently only works for BraTS Clustering
+        if args.vis and ((epoch % ((args.epochs + 1) // (n_epochs - 2))) == 0 or epoch==args.epochs) and args.model == 'cluster' and args.n == 'brats': 
+            # TODO: Currently only works for BraTS Clustering
+            # The n_epochs - 2 is because we want to sample one less so that we can always add the final epoch in the end regardless of the step, and one less because epoch 0 is always included
+
             print("==> validating...")
             
             # Validate
@@ -129,6 +132,9 @@ def train_3d(args, data_loader, run_dir, out_channel=3, writer=None):
             for i, ax in enumerate(axes.flat):
                 ax.imshow(grid_preds[i])
                 ax.axis('off')  # Turn off axis labels
+                if i % n_cols:
+                    ax.set_ylabel(f'Epoch {epoch}', rotation=0, size='large')
+
             plt.tight_layout()  # Adjust spacing between subplots
 
             # Save grid to buffer and then log on tensorboard
@@ -184,8 +190,6 @@ def train_pcrlv2_inner(args, epoch, train_loader, model, optimizer, criterion, c
             x2 = x2.cuda()
             gt1 = gt1.cuda()
             gt2 = gt2.cuda()
-            crop1_coords = crop1_coords.cuda()
-            crop2_coords = crop2_coords.cuda()
 
         # Get predictions
         mask1, decoder_outputs1, middle_masks1 = model(x1)
@@ -332,8 +336,8 @@ def train_cluster_inner(args, epoch, train_loader, model, optimizer, criterion, 
             gt2 = gt2 / temp
 
         # Convert to probabilities
-        # prob_gt1 = gt1.softmax(2)  # TODO: Have to check if this is already a probability
-        # prob_gt2 = gt2.softmax(2)
+        gt1 = gt1.softmax(2)  # TODO: Check if this is already a probability
+        gt2 = gt2.softmax(2)
         pred1 = pred1.softmax(2)
         pred2 = pred2.softmax(2)
 
@@ -484,8 +488,8 @@ def val_cluster_inner(args, epoch, val_loader, model, colors):
 
         for idx, (image, _, gt, _, crop_coords, _, _) in enumerate(val_loader):
             
-            if idx == 1:
-                break  # Stop after the first batch
+            if idx != 0:
+                continue  # Validate only batch 2
 
             B, _, H, W, D = image.shape
             N = model.module.patch_num
@@ -515,7 +519,7 @@ def val_cluster_inner(args, epoch, val_loader, model, colors):
 
             # Gather predictions to visualize on grid
             n_images = min(10,args.b)  # The number of images to sample from for the grid (10 or all images if total less than 10)
-            # If epoch 0, add the input images as the first row of the grid
+            # If first epoch, add the input images as the first row of the grid
             if epoch == 0:  
                 for img_idx in range(n_images):
                     x_i = x[img_idx,0,:,:,D//2]                   
@@ -528,6 +532,8 @@ def val_cluster_inner(args, epoch, val_loader, model, colors):
                 pred_i = pred[img_idx,:,:,:,NPD//2].argmax(dim=0).unsqueeze(0)  # Take only hard cluster assignment (argmax)
                 pred_i = f.interpolate(pred_i.float().unsqueeze(0), size=(H,W)).squeeze(0)  # Interpolate cluster masks to original input shape
                 pred_i = pred_i.repeat((3,1,1)).permute(1,2,0)  # Convert to RGB and move channel dim to the end
+                pred_i = pred_i.cpu().detach() # Send pred and color tensors to cpu
+                colors = colors.cpu()
                 for i in range(colors.shape[0]):  # Give color to each cluster in cluster masks
                     pred_i[pred_i[:,:,0] == i] = colors[i]
                 pred_i = pred_i.cpu().detach()

@@ -12,11 +12,11 @@ from torch.utils.data import Dataset
 import torchio.transforms
 
 class LidcFineTune(Dataset):
-    def __init__(self, config, img_list, train=False, input_shape=(64, 64, 64)):
+    def __init__(self, config, img_list, train=False, crop_size=(64, 64, 64)):
         self.config = config
         self.train = train
         self.img_list = img_list
-        self.input_shape = input_shape
+        self.crop_size = crop_size
 
         # Create setup file for pylidc
         txt = f"""
@@ -37,7 +37,8 @@ class LidcFineTune(Dataset):
         x = scan.to_volume()  # Image
         y = ann.boolean_mask() # Segmentation mask
 
-        # TODO: Random crop if train and center crop if not
+        # TODO: Scale down 0.5
+        
         if self.train:
             # crop volume
             x, y = self.random_crop(x, y)

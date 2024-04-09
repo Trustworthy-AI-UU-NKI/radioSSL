@@ -336,8 +336,8 @@ def train_cluster_inner(args, epoch, train_loader, model, optimizer, criterion, 
             gt2 = gt2 / temp
 
         # Convert to probabilities
-        gt1 = gt1.softmax(2)  # TODO: Check if this is already a probability
-        gt2 = gt2.softmax(2)
+        # gt1 = gt1.softmax(2)  # TODO: Check if this is already a probability
+        # gt2 = gt2.softmax(2)
         pred1 = pred1.softmax(2)
         pred2 = pred2.softmax(2)
 

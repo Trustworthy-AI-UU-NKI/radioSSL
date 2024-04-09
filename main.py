@@ -1,7 +1,6 @@
 import argparse
 import os
 import warnings
-import re
 
 import torch.backends.cudnn
 from train_2d import train_pcrlv2

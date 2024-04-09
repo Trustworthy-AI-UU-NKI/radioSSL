@@ -3,7 +3,9 @@ from glob import glob
 import numpy as np
 import math
 import os
+import time
 import torch
+from torch.utils.tensorboard import SummaryWriter
 import random
 from PIL import ImageFilter
 import torch.nn.functional as F
@@ -27,6 +29,61 @@ def seed_worker(worker_id):  # This is for the workers of the dataloader that ne
     worker_seed = torch.initial_seed() % 2**32
     np.random.seed(worker_seed)
     random.seed(worker_seed)
+
+
+def create_logger(args):
+    curr_time = str(time.time()).replace(".", "")
+    
+    if args.phase in ['finetune', 'pretask']:  # If finetune or pretask, use the specified output path
+        folder_name = None
+        
+        if args.phase == 'finetune':
+            cluster_k = re.search(r'_k[0-9]+_', args.weight).group(0)[1:] if args.model == 'cluster' else ''
+            sc = 'sc_' if args.skip_conn else ''
+            run_name = f'{args.model}_{args.d}d_{cluster_k}{sc}pretrain_{args.pretrained}_finetune_{args.finetune}_b{args.b}_e{args.epochs}_lr{"{:f}".format(args.lr).split(".")[-1]}_r{int(args.ratio * 100)}_t{curr_time}'
+            
+            pretrain_type = None
+            # Pretrain types that use weights
+            if args.weight:  
+                weight_dir = args.weight.lower()
+                pretrain_type = args.model
+                if 'luna' in weight_dir:
+                    pretrain_type += '_luna_pretrain'
+                elif 'brats' in weight_dir:
+                    pretrain_type += '_brats_pretrain'
+                elif 'lits' in weight_dir:
+                    pretrain_type += '_lits_pretrain'
+                elif 'chest' in weight_dir:
+                    pretrain_type += '_chest_pretrain'
+            # Pretrain types that don't use weights
+            elif not args.weight:
+                if args.model == 'imagenet':
+                    pretrain_type = f'imagenet_pretrain'
+                elif args.model == 'scratch' or args.pretrained == 'none':
+                    pretrain_type = f'scratch_{args.d}d'
+            folder_name =  args.n + '_finetune' + '_' + pretrain_type
+        
+        elif args.phase == 'pretask':
+            if args.model == 'pcrlv2':
+                run_name = f'{args.model}_{args.d}d_{"sc_" if args.skip_conn else ""}pretask_b{args.b}_e{args.epochs}_lr{"{:f}".format(args.lr).split(".")[-1]}_t{curr_time}'
+            elif args.model == 'cluster':
+                run_name = f'{args.model}_{args.d}d_k{args.k}_pretask_b{args.b}_e{args.epochs}_lr{"{:f}".format(args.lr).split(".")[-1]}_t{curr_time}'
+            folder_name = args.model + '_' + args.n + '_pretrain'
+        
+        if not os.path.exists(os.path.join(args.output,folder_name)):
+            os.makedirs(os.path.join(args.output,folder_name))
+        run_dir = os.path.join(args.output, folder_name, run_name)
+    
+    elif args.phase == 'test':  # If test, then just use the path from the loaded weights
+        run_dir = args.weight.replace('.pt','') # remove .pt
+
+    writer = None   
+    if args.tensorboard or args.vis:  # Create tensorboard writer
+        assert args.tensorboard  # args.vis can only be used with args.tensorboard
+        print(f'Tensorboard logging at: {run_dir}\n')
+        writer = SummaryWriter(run_dir)
+
+    return writer, run_dir
 
 
 def get_model(args, in_channels, n_class):
@@ -244,8 +301,30 @@ def get_luna_list(config, train_fold, valid_fold, test_fold, suffix, file_list):
                 x_test.append(os.path.join(config.data, 'subset' + str(i), file))
     return x_train, x_valid, x_test
 
+def get_lidc_list(ratio, path):
+    val_patients_list = []
+    train_patients_list = []
+    test_patients_list = []
+    with open('./train_val_txt/lidc_train.txt', 'r') as f:
+        for line in f:
+            line = line.strip('\n')
+            train_patients_list.append(line)
+    with open('./train_val_txt/lidc_valid.txt', 'r') as f:
+        for line in f:
+            line = line.strip('\n')
+            val_patients_list.append(line)
+    with open('./train_val_txt/lidc_test.txt', 'r') as f:
+        for line in f:
+            line = line.strip('\n')
+            test_patients_list.append(line)
+    train_patients_list = train_patients_list[: int(len(train_patients_list) * ratio)]
+    print(
+        f"Train Patients: {len(train_patients_list)}, Valid Patients: {len(val_patients_list)},"
+        f"Test Patients {len(test_patients_list)}\n")
+    return train_patients_list, val_patients_list, test_patients_list
 
-def get_brats_list(data, ratio):
+
+def get_brats_list(ratio, path):
     val_patients_list = []
     train_patients_list = []
     test_patients_list = []
@@ -258,7 +337,6 @@ def get_brats_list(data, ratio):
             line = line.strip('\n')
             val_patients_list.append(os.path.join(data, line))
     with open('./train_val_txt/brats_test.txt', 'r') as f:
-
         for line in f:
             line = line.strip('\n')
             test_patients_list.append(os.path.join(data, line))
@@ -467,6 +545,10 @@ def get_loss(dataset):
     loss_fun = globals()[loss_fun_name]
     return loss_fun
 
+def lidc_dice_loss(input, target, train=True):
+    loss = bceDiceLoss(input, target, train)
+    print(f'loss: {loss}')
+    return loss
 
 def brats_dice_loss(input, target, train=True):
     wt_loss = bceDiceLoss(input[:, 0], target[:, 0], train)

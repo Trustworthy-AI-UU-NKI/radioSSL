@@ -268,6 +268,14 @@ def test_segmentation(args, dataloader, in_channels, n_classes, writer=None):
     return writer
 
 
+def train_lidc_segmentation(args, dataloader, run_dir, writer=None):
+    return train_segmentation(args, dataloader, 1, 1, run_dir, writer)
+
+
+def test_lidc_segmentation(args, dataloader, finetuned_model=None, writer=None):
+    return test_segmentation(args, dataloader, 1, 1, writer)
+
+
 def train_brats_segmentation(args, dataloader, run_dir, writer=None):
     return train_segmentation(args, dataloader, 4, 3, run_dir, writer)
 

@@ -29,7 +29,7 @@ if __name__ == '__main__':
     parser.add_argument('--epochs', default=100, type=int, help='Epochs to train')
     parser.add_argument('--lr', default=1e-3, type=float, help='Learning rate')
     parser.add_argument('--output', default='None', type=str, help='Output path')
-    parser.add_argument('--n', default='luna', choices=['luna', 'lits', 'brats'], type=str, help='Dataset to use')
+    parser.add_argument('--n', default='luna', choices=['luna', 'lidc', 'brats', 'lits'], type=str, help='Dataset to use')
     parser.add_argument('--d', default=3, type=int, help='3D or 2D to run')
     parser.add_argument('--workers', default=4, type=int, help='Num of workers')
     parser.add_argument('--gpus', default='0,1,2,3', type=str, help='GPU indices to use')

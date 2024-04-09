@@ -176,7 +176,7 @@ class DataGenerator:
         dataloader = {}
 
         train_path = os.path.join(args.data, 'train', 'ct')
-        valid_path = os.path.join(args.data, 'train', 'ct')  # TODO: change to val when ready
+        valid_path = os.path.join(args.data, 'val', 'ct')
 
         x_train = [os.path.join(train_path,x) for x in os.listdir(train_path) if 'global' in x]
         x_valid = [os.path.join(valid_path,x) for x in os.listdir(valid_path) if 'global' in x]
@@ -205,18 +205,19 @@ class DataGenerator:
         dataloader = {}
         train_list, val_list, test_list = get_brats_list(self.args.data, self.args.ratio)
         train_ds = BratsFineTune(train_list, train=True)
-        val_ds = BratsFineTune(val_list, train=False)
+        valid_ds = BratsFineTune(val_list, train=False)
         test_ds = BratsFineTune(test_list, train=False)
 
         generator = torch.Generator()
         generator.manual_seed(args.seed)
+
         dataloader['train'] = DataLoader(train_ds, batch_size=self.args.b,
                                          num_workers=self.args.workers,
                                          worker_init_fn=seed_worker,
                                          generator=generator,
                                          pin_memory=True,
                                          shuffle=True)
-        dataloader['eval'] = DataLoader(val_ds, batch_size=self.args.b,
+        dataloader['eval'] = DataLoader(valid_ds, batch_size=self.args.b,
                                         num_workers=self.args.workers,
                                         worker_init_fn=seed_worker,
                                         generator=generator,
@@ -229,36 +230,36 @@ class DataGenerator:
                                         shuffle=False)
         return dataloader
 
-    def luna_finetune(self):
-        luna_valid_txt = 'train_val_txt/luna_finetune_test.txt'
-        luna_test_txt = 'train_val_txt/luna_finetune_valid.txt'
-        # luna_train_txt = 'train_val_txt/luna_finetune_train.txt'
+    def lidc_finetune(self):
         args = self.args
         dataloader = {}
-        train_fold = [0, 1, 2, 3, 4, 5, 6]
-        valid_fold = [7, 8]
-        test_fold = [9]
-        file_list = get_luna_finetune_list(args.ratio, args.data, train_fold)
-        print(len(file_list))
-        x_train, x_valid, x_test = get_luna_finetune_nodule(args, train_fold, luna_valid_txt, luna_test_txt,
-                                                            suffix='.npy',
-                                                            file_list=file_list)
-        print(len(x_train))
-        train_ds_true, train_ds_false = divide_luna_true_positive(x_train)
-        valid_ds_true, valid_ds_false = divide_luna_true_positive(x_valid)
-        test_ds_true, test_ds_false = divide_luna_true_positive(x_test)
+        
+        train_list, valid_list, test_list = get_lidc_list(args.ratio, args.data)
 
-        train_ds = LunaFineTune(args, train_ds_true, train_ds_false, train=True)
-        valid_ds = LunaFineTune(args, valid_ds_true, valid_ds_false, train=False)
-        test_ds = LunaFineTune(args, test_ds_true, test_ds_false, train=False, test=True)
+        train_ds = LidcFineTune(args, train_list, train=True)
+        valid_ds = LidcFineTune(args, valid_list, train=False)
+        test_ds = LidcFineTune(args, test_list, train=False)
+
         generator = torch.Generator()
         generator.manual_seed(args.seed)
-        dataloader['train'] = DataLoader(train_ds, batch_size=args.b,
-                                         pin_memory=True, shuffle=True, num_workers=args.workers, worker_init_fn=seed_worker, generator=generator)
-        dataloader['eval'] = DataLoader(valid_ds, batch_size=args.b,
-                                        pin_memory=True, shuffle=False, num_workers=args.workers, worker_init_fn=seed_worker, generator=generator)
-        dataloader['test'] = DataLoader(test_ds, batch_size=args.b,
-                                        pin_memory=True, shuffle=False, num_workers=args.workers, worker_init_fn=seed_worker, generator=generator)
+
+        dataloader['train'] = DataLoader(train_ds, batch_size=self.args.b,
+                                         num_workers=self.args.workers,
+                                         worker_init_fn=seed_worker,
+                                         generator=generator,
+                                         pin_memory=True,
+                                         shuffle=True)
+        dataloader['eval'] = DataLoader(valid_ds, batch_size=self.args.b,
+                                        num_workers=self.args.workers,
+                                        worker_init_fn=seed_worker,
+                                        generator=generator,
+                                        pin_memory=True,
+                                        shuffle=False)
+        dataloader['test'] = DataLoader(test_ds, batch_size=1, num_workers=self.args.b,
+                                        worker_init_fn=seed_worker,
+                                        generator=generator,
+                                        pin_memory=True,
+                                        shuffle=False)
         print(f"Training Nodule{len(train_ds)} Valid Nodule {len(valid_ds)}, Test Nodule {len(test_ds)}")
         return dataloader
 
@@ -275,6 +276,7 @@ class DataGenerator:
 
         generator = torch.Generator()
         generator.manual_seed(args.seed)
+
         dataloader['train'] = DataLoader(train_ds, batch_size=self.args.b,
                                          num_workers=self.args.workers,
                                          worker_init_fn=seed_worker,

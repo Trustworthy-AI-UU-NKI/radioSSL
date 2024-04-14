@@ -79,6 +79,9 @@ def train_segmentation(args, dataloader, in_channels, n_classes, run_dir, writer
                 image = f.interpolate(image, size=(H,W))
                 gt = f.interpolate(gt, size=(H,W))
 
+            # image = image.permute(0,1,2,4,3)  # TODO: DONT FORGET TO SWITCH BACK!
+            # gt = gt.permute(0,1,2,4,3)
+            # pred = model(image) 
             pred = model(image)
 
             if args.d == 2: # If 2D unet, then revert to original dims

@@ -1,8 +1,8 @@
 from glob import glob
-
 import numpy as np
 import math
 import os
+import re
 import time
 import torch
 from torch.utils.tensorboard import SummaryWriter
@@ -324,7 +324,7 @@ def get_lidc_list(ratio, path):
     return train_patients_list, val_patients_list, test_patients_list
 
 
-def get_brats_list(ratio, path):
+def get_brats_list(data, ratio):
     val_patients_list = []
     train_patients_list = []
     test_patients_list = []

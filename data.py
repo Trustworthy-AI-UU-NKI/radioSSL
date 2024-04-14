@@ -234,7 +234,7 @@ class DataGenerator:
         args = self.args
         dataloader = {}
         
-        train_list, valid_list, test_list = get_lidc_list(args.ratio, args.data)
+        train_list, valid_list, test_list = get_lidc_list(args.ratio)
 
         train_ds = LidcFineTune(args, train_list, train=True)
         valid_ds = LidcFineTune(args, valid_list, train=False)

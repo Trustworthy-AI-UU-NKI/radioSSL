@@ -69,7 +69,7 @@ class BratsPretask(Dataset):
 
 class BratsFineTune(Dataset):
 
-    def __init__(self, patients_dir, crop_size=(112, 128, 112), modes=("t1", "t2", "flair", "t1ce"), train=True):
+    def __init__(self, patients_dir, crop_size=(128, 128, 128), modes=("t1", "t2", "flair", "t1ce"), train=True):
         self.patients_dir = patients_dir
         self.modes = modes
         self.train = train

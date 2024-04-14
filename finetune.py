@@ -69,25 +69,18 @@ def train_segmentation(args, dataloader, in_channels, n_classes, run_dir, writer
 
             if args.d == 2: # If model is 2D unet, then combine batch and slice dimension and scale input to power of 2
                 # Input dimensions
-                B, M, H, D, W = image.shape
+                B, M, H, W, D = image.shape
                 _, C, _, _, _ = gt.shape 
                 # Combine batch and slice dim
-                image = image.permute(0,3,1,2,4).reshape(B*D,M,H,W)  # B x M x H x D x W -> B*D x M x H x W
-                gt = gt.permute(0,3,1,2,4).flatten(0,1).reshape(B*D,C,H,W)
-                # Scale
-                H, W = (128,128)
-                image = f.interpolate(image, size=(H,W))
-                gt = f.interpolate(gt, size=(H,W))
+                image = image.permute(0,4,1,2,3).reshape(B*D,M,H,W)  # B x M x H x W x D -> B*D x M x H x W
+                gt = gt.permute(0,4,1,2,3).reshape(B*D,C,H,W)
 
-            # image = image.permute(0,1,2,4,3)  # TODO: DONT FORGET TO SWITCH BACK!
-            # gt = gt.permute(0,1,2,4,3)
-            # pred = model(image) 
-            pred = model(image)
+            pred = model(image) 
 
             if args.d == 2: # If 2D unet, then revert to original dims
-                image = image.reshape(B,D,M,H,W).permute(0,2,3,1,4)
-                gt = gt.reshape(B,D,C,H,W).permute(0,2,3,1,4)
-                pred = f.sigmoid(pred.reshape(B,D,C,H,W).permute(0,2,3,1,4))  # Also apply sigmoid becauce the 2D model doesn't
+                image = image.reshape(B,D,M,H,W).permute(0,2,3,4,1)
+                gt = gt.reshape(B,D,C,H,W).permute(0,2,3,4,1)
+                pred = f.sigmoid(pred.reshape(B,D,C,H,W).permute(0,2,3,4,1))  # Also apply sigmoid becauce the 2D model doesn't
 
             loss = criterion(pred, gt)
             optimizer.zero_grad()
@@ -105,11 +98,11 @@ def train_segmentation(args, dataloader, in_channels, n_classes, run_dir, writer
                 mod_idx = 0
                 c_idx = 0
                 img_idx = 0
-                slc_idx = image.shape[3] // 2
+                slc_idx = image.shape[4] // 2
 
-                image = image[img_idx,mod_idx,:,slc_idx,:].cpu().detach().numpy()
-                gt = gt[img_idx,:,:,slc_idx,:].cpu().detach().numpy()
-                pred = pred[img_idx,:,:,slc_idx,:].cpu().detach().numpy()
+                image = image[img_idx,mod_idx,:,:,slc_idx].cpu().detach().numpy()
+                gt = gt[img_idx,:,:,:,slc_idx].cpu().detach().numpy()
+                pred = pred[img_idx,:,:,:,slc_idx].cpu().detach().numpy()
 
                 image_name = f'b{b_idx}_img{img_idx}_slc{slc_idx}_raw'
                 gt_name = f'b{b_idx}_img{img_idx}_slc{slc_idx}_gt'
@@ -131,22 +124,19 @@ def train_segmentation(args, dataloader, in_channels, n_classes, run_dir, writer
 
                 if args.d == 2:
                     # Input dimensions
-                    B, M, _, D, _ = x.shape
+                    B, M, H, W, D = x.shape
                     _, C, _, _, _ = y.shape 
-                    H, W = (128,128)
+
                     # Combine batch and slice dim
-                    x = x.permute(0,3,1,2,4).flatten(0,1)  # B x M x H x D x W -> B*D x M x H x W
-                    y = y.permute(0,3,1,2,4).flatten(0,1)
-                    # Scale
-                    x = f.interpolate(x, size=(H,W))
-                    y = f.interpolate(y, size=(H,W))
+                    x = x.permute(0,4,1,2,3).flatten(0,1)  # B x M x H x W x D -> B*D x M x H x W
+                    y = y.permute(0,4,1,2,3).flatten(0,1)
 
                 pred = model(x)
 
                 if args.d == 2:
-                    x = x.reshape(B,D,M,H,W).permute(0,2,3,1,4)
-                    y = y.reshape(B,D,C,H,W).permute(0,2,3,1,4)
-                    pred = f.sigmoid(pred.reshape(B,D,C,H,W).permute(0,2,3,1,4))  # Also apply sigmoid because the 2D model doesn't
+                    x = x.reshape(B,D,M,H,W).permute(0,2,3,4,1)
+                    y = y.reshape(B,D,C,H,W).permute(0,2,3,4,1)
+                    pred = f.sigmoid(pred.reshape(B,D,C,H,W).permute(0,2,3,4,1))  # Also apply sigmoid because the 2D model doesn't
 
                 loss = criterion(pred, y)
                 valid_losses.append(round(loss.item(),4))
@@ -214,22 +204,19 @@ def test_segmentation(args, dataloader, in_channels, n_classes, writer=None):
 
             if args.d == 2:
                 # Input dimensions
-                B, M, _, D, _ = x.shape
+                B, M, H, W, D = x.shape
                 _, C, _, _, _ = y.shape 
-                H, W = (128,128)
+
                 # Combine batch and slice dim
-                x = x.permute(0,3,1,2,4).flatten(0,1)  # B x M x H x D x W -> B*D x M x H x W
-                y = y.permute(0,3,1,2,4).flatten(0,1)
-                # Scale
-                x = f.interpolate(x, size=(H,W))
-                y = f.interpolate(y, size=(H,W))
+                x = x.permute(0,4,1,2,3).flatten(0,1)  # B x M x H x W x D -> B*D x M x H x W
+                y = y.permute(0,4,1,2,3).flatten(0,1)
 
             pred = model(x)
 
             if args.d == 2:
-                x = x.reshape(B,D,M,H,W).permute(0,2,3,1,4)
-                y = y.reshape(B,D,C,H,W).permute(0,2,3,1,4)
-                pred = f.sigmoid(pred.reshape(B,D,C,H,W).permute(0,2,3,1,4))  # Also apply sigmoid becauce the 2D model doesn't
+                x = x.reshape(B,D,M,H,W).permute(0,2,3,4,1)
+                y = y.reshape(B,D,C,H,W).permute(0,2,3,4,1)
+                pred = f.sigmoid(pred.reshape(B,D,C,H,W).permute(0,2,3,4,1))  # Also apply sigmoid becauce the 2D model doesn't
 
             loss = criterion(pred, y)
 
@@ -242,7 +229,7 @@ def test_segmentation(args, dataloader, in_channels, n_classes, writer=None):
                 test_dice_tc_arr.append(test_dice_tc)
                 test_dice_et_arr.append(test_dice_et)
                 test_dice_arr.append(test_dice)
-            elif args.n == 'lits':
+            else:
                 test_dice = dice_coeff(pred, y)
                 test_dice_arr.append(test_dice)
 

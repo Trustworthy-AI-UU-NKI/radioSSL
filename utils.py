@@ -1,5 +1,6 @@
 from glob import glob
 import numpy as np
+import re
 import math
 import os
 import re
@@ -38,7 +39,10 @@ def create_logger(args):
         folder_name = None
         
         if args.phase == 'finetune':
-            cluster_k = re.search(r'_k[0-9]+_', args.weight).group(0)[1:] if args.model == 'cluster' else ''
+            if args.model == 'cluster':
+                cluster_k = re.search(r'_k[0-9]+_', args.weight).group(0)[1:]
+            else:
+                cluster_k = ''
             sc = 'sc_' if args.skip_conn else ''
             run_name = f'{args.model}_{args.d}d_{cluster_k}{sc}pretrain_{args.pretrained}_finetune_{args.finetune}_b{args.b}_e{args.epochs}_lr{"{:f}".format(args.lr).split(".")[-1]}_r{int(args.ratio * 100)}_t{curr_time}'
             
@@ -301,7 +305,7 @@ def get_luna_list(config, train_fold, valid_fold, test_fold, suffix, file_list):
                 x_test.append(os.path.join(config.data, 'subset' + str(i), file))
     return x_train, x_valid, x_test
 
-def get_lidc_list(ratio, path):
+def get_lidc_list(ratio):
     val_patients_list = []
     train_patients_list = []
     test_patients_list = []

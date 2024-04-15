@@ -260,7 +260,6 @@ class DataGenerator:
                                         generator=generator,
                                         pin_memory=True,
                                         shuffle=False)
-        print(f"Training Nodule{len(train_ds)} Valid Nodule {len(valid_ds)}, Test Nodule {len(test_ds)}")
         return dataloader
 
     def lits_finetune(self):

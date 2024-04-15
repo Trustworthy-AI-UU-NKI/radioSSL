@@ -13,7 +13,7 @@ from torch.nn import functional as f
 import torchio.transforms
 
 class LidcFineTune(Dataset):
-    def __init__(self, config, img_list, crop_size=(128, 128, 128), train=False):
+    def __init__(self, config, img_list, crop_size=(128, 128, 64), train=False):  # 64 because some raw data don't have many slices
         self.config = config
         self.train = train
         self.img_list = img_list
@@ -33,14 +33,23 @@ class LidcFineTune(Dataset):
 
     def __getitem__(self, index):
         pid = self.img_list[index]
+        print(pid)
         scan = pl.query(pl.Scan).filter(pl.Scan.patient_id == pid).first()
         ann = pl.query(pl.Annotation).filter(pl.Scan.patient_id == pid).first()
-        x = scan.to_volume()  # Image
-        y = ann.boolean_mask() # Segmentation mask
+        
+        # Image
+        try:
+            x = torch.FloatTensor(scan.to_volume())
+        except Exception as e:
+            print(pid)
+            raise RuntimeError(f"Error from {pid}r") from e
 
-        x = torch.FloatTensor(x)
-        y = torch.FloatTensor(y)
-
+        # Segmentation mask
+        y = torch.zeros(x.shape)
+        mask = torch.FloatTensor(ann.boolean_mask())
+        bbox = ann.bbox()
+        y[bbox[0].start:bbox[0].stop,bbox[1].start:bbox[1].stop,bbox[2].start:bbox[2].stop] = mask
+        
         # Resize
         x = x.T.unsqueeze(1) # Move slice dim to batch dim and add temporary channel dimension (H x W x D) -> (D x 1 x H x W)
         y = y.T.unsqueeze(1)

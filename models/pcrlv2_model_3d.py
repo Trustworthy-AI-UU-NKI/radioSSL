@@ -164,27 +164,33 @@ class Cluster3d(nn.Module):
         self.sigmoid = nn.Sigmoid()
 
         # Clustering Pretask Head
-        self.patch_dim = (8,8,4)  # P1 x P2 x P3
-        self.patch_num = 512  # N  # Does nothing, just useful info
+        self.patch_dim = [(64,64,32),(32,32,16),(16,16,8),(8,8,4)]  # Patch dims P1 x P2 x P3 for each scale
+        self.patch_num = [64, 128, 256, 512]  # Number of patches N for each scale
         self.emb_dim = 64  # D
         self.proto_num = n_clusters  # K
-        self.cluster_projection_head = nn.Linear(self.patch_dim[0]*self.patch_dim[1]*self.patch_dim[2], self.emb_dim)  # Projection head
+        self.cluster_projection_head = [nn.Linear(self.patch_dim[i][0]*self.patch_dim[i][1]*self.patch_dim[i][2], self.emb_dim) for i in range(0,4)]  # Projection head
         self.prototypes = nn.Linear(self.emb_dim, self.proto_num, bias=False)
 
     def forward(self, x, local=False):
-        b = x.shape[0]
+
+        # Forward pass
         self.skip_out64 = self.down_tr64(x)
         self.skip_out128 = self.down_tr128(self.maxpool(self.skip_out64))
         self.skip_out256 = self.down_tr256(self.maxpool(self.skip_out128))
         self.out512 = self.down_tr512(self.maxpool(self.skip_out256))
 
-        # Flatten spatial dims of feature map
-        B, N, PH, PW, PD = self.out512.shape  # Batch, Number of patches, Patch spatial dims
-        encoder_output = self.out512.reshape(B, N, PH*PW*PD)
+        # Get feature maps at every scale
+        feat = [self.skip_out64, self.skip_out128, self.skip_out256, self.out512]
 
-        # Get embeddings and output preds
-        emb = self.cluster_projection_head(encoder_output)
-        out = self.prototypes(emb)
+        # Flatten spatial dims P1,P2,P3 of feature maps (B x N x P1 x P2 x P3) at every scale
+        flat_feat = [f.flatten(start_dim=2,end_dim=4) for f in feat]
+
+        # Get embeddings and output preds at every scale
+        emb = []
+        out = []
+        for i in range(0,4):
+            emb.append(self.cluster_projection_head[i](flat_feat[i]))
+            out.append(self.prototypes[i](emb[i]))
 
         return emb, out
 

@@ -293,70 +293,78 @@ def train_cluster_inner(args, epoch, train_loader, model, optimizer, criterion, 
             crop1_coords = crop1_coords.cuda()
             crop2_coords = crop2_coords.cuda()
 
-        # Get embeddings and predictions
-        emb1, pred1 = model(x1)
-        emb2, pred2 = model(x2)
+        # Get embeddings and predictions for all scales
+        emb1_all, pred1_all = model(x1)
+        emb2_all, pred2_all = model(x2)
         
         ## SwAV Loss
-        
-        # Normalize D dimension (BxNxD)
-        emb1 = nn.functional.normalize(emb1, dim=2, p=2)  
-        emb2 = nn.functional.normalize(emb2, dim=2, p=2) 
+        loss1 = []
+        n_scales = len(emb1_all)
+        for i in range(n_scales):  # For each scale
+            emb1 = emb1_all[i]
+            emb2 = emb2_all[i]
+            pred1 = pred1_all[i]
+            pred2 = pred2_all[i]
 
-        # Get ground truths (teacher predictions)
-        with torch.no_grad():
-            # Get prototypes and normalize
-            proto = model.module.prototypes.weight.data.clone()
-            proto = nn.functional.normalize(proto, dim=1, p=2)  # Normalize D dimension (KxD)
+            # Normalize D dimension (BxNxD)
+            emb1 = nn.functional.normalize(emb1, dim=2, p=2)  
+            emb2 = nn.functional.normalize(emb2, dim=2, p=2) 
 
-            # Embedding to prototype similarity matrix
-            cos_sim1 = torch.matmul(emb1, proto.t())  # BxNxK
-            cos_sim2 = torch.matmul(emb2, proto.t())
+            # Get ground truths (teacher predictions)
+            with torch.no_grad():
+                # Get prototypes and normalize
+                proto = model.module.prototypes.weight.data.clone()
+                proto = nn.functional.normalize(proto, dim=1, p=2)  # Normalize D dimension (KxD)
 
-            N = model.module.patch_num
-            PH, PW, PD = model.module.patch_dim
-            K = model.module.proto_num
+                # Embedding to prototype similarity matrix
+                cos_sim1 = torch.matmul(emb1, proto.t())  # BxNxK
+                cos_sim2 = torch.matmul(emb2, proto.t())
 
-            # Flatten batch and patch num dimensions of similarity matrices (BxNxK -> B*NxK), and transpose matrices (KxB*N) for sinkhorn algorithm
-            flat_cos_sim1 = cos_sim1.reshape(B*N,K).T
-            flat_cos_sim2 = cos_sim2.reshape(B*N,K).T
+                N = model.module.patch_num[i]
+                PH, PW, PD = model.module.patch_dim[i]
+                K = model.module.proto_num
 
-            # Standardize for numerical stability (maybe?)
-            eps = 0.05
-            flat_cos_sim1 = torch.exp(flat_cos_sim1 / eps)
-            flat_cos_sim2 = torch.exp(flat_cos_sim2 / eps)
+                # Flatten batch and patch num dimensions of similarity matrices (BxNxK -> B*NxK), and transpose matrices (KxB*N) for sinkhorn algorithm
+                flat_cos_sim1 = cos_sim1.reshape(B*N,K).T
+                flat_cos_sim2 = cos_sim2.reshape(B*N,K).T
 
-            # Teacher cluster assignments
-            gt1 = sinkhorn(args, Q=flat_cos_sim1, nmb_iters=3).T.reshape((B,N,K))  # Also restore patch num dimension
-            gt2 = sinkhorn(args, Q=flat_cos_sim2, nmb_iters=3).T.reshape((B,N,K))
+                # Standardize for numerical stability (maybe?)
+                eps = 0.05
+                flat_cos_sim1 = torch.exp(flat_cos_sim1 / eps)
+                flat_cos_sim2 = torch.exp(flat_cos_sim2 / eps)
 
-            # Apply temperature
-            temp = 1
-            gt1 = gt1 / temp
-            gt2 = gt2 / temp
+                # Teacher cluster assignments
+                gt1 = sinkhorn(args, Q=flat_cos_sim1, nmb_iters=3).T.reshape((B,N,K))  # Also restore patch num dimension
+                gt2 = sinkhorn(args, Q=flat_cos_sim2, nmb_iters=3).T.reshape((B,N,K))
 
-        # Convert to probabilities
-        # gt1 = gt1.softmax(2)  # TODO: Check if this is already a probability
-        # gt2 = gt2.softmax(2)
-        pred1 = pred1.softmax(2)
-        pred2 = pred2.softmax(2)
+                # Apply temperature
+                temp = 1
+                gt1 = gt1 / temp
+                gt2 = gt2 / temp
 
-        # Convert prediction and ground truth to (soft) cluster masks (restore spatial position of pooled image)
-        NPH = H//PH  # Num patches at X
-        NPW = W//PW  # Num patches at Y
-        NPD = D//PD  # Num patches at Z
-        pred1 = pred1.permute(0,2,1).reshape((B,K,NPH,NPW,NPD))
-        pred2 = pred2.permute(0,2,1).reshape((B,K,NPH,NPW,NPD))
-        gt1 = gt1.permute(0,2,1).reshape((B,K,NPH,NPW,NPD))
-        gt2 = gt2.permute(0,2,1).reshape((B,K,NPH,NPW,NPD))
+            # Convert to probabilities
+            pred1 = pred1.softmax(2)
+            pred2 = pred2.softmax(2)
 
-        # ROI-align crop intersection with cluster assignment intersection
-        pred1, pred2, gt1, gt2 = roi_align_intersect(pred1, pred2, gt1, gt2, crop1_coords, crop2_coords)
+            # Convert prediction and ground truth to (soft) cluster masks (restore spatial position of pooled image)
+            NPH = H//PH  # Num patches at X
+            NPW = W//PW  # Num patches at Y
+            NPD = D//PD  # Num patches at Z
+            pred1 = pred1.permute(0,2,1).reshape((B,K,NPH,NPW,NPD))
+            pred2 = pred2.permute(0,2,1).reshape((B,K,NPH,NPW,NPD))
+            gt1 = gt1.permute(0,2,1).reshape((B,K,NPH,NPW,NPD))
+            gt2 = gt2.permute(0,2,1).reshape((B,K,NPH,NPW,NPD))
 
-        # Loss
-        loss1 = swav_loss(gt1, gt2, pred1, pred2)
+            # ROI-align crop intersection with cluster assignment intersection
+            pred1, pred2, gt1, gt2 = roi_align_intersect(pred1, pred2, gt1, gt2, crop1_coords, crop2_coords)
+
+            # SwAV Loss for current scale
+            scale_swav_loss = swav_loss(gt1, gt2, pred1, pred2)
+
+            loss1.append(scale_swav_loss)
 
         # TODO: add the other losses later
+        loss1 = sum(loss1)/len(loss1)
         loss2 = torch.tensor(0)
         loss4 = 0
         local_loss = 0

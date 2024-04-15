@@ -33,7 +33,6 @@ class LidcFineTune(Dataset):
 
     def __getitem__(self, index):
         pid = self.img_list[index]
-        print(pid)
         scan = pl.query(pl.Scan).filter(pl.Scan.patient_id == pid).first()
         ann = pl.query(pl.Annotation).filter(pl.Scan.patient_id == pid).first()
         
@@ -41,8 +40,7 @@ class LidcFineTune(Dataset):
         try:
             x = torch.FloatTensor(scan.to_volume())
         except Exception as e:
-            print(pid)
-            raise RuntimeError(f"Error from {pid}r") from e
+            raise RuntimeError(f"Corrupted file in {pid}. Redownload!") from e
 
         # Segmentation mask
         y = torch.zeros(x.shape)

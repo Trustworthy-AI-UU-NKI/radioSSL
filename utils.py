@@ -69,7 +69,8 @@ def create_logger(args):
         
         elif args.phase == 'pretask':
             if args.model == 'pcrlv2':
-                run_name = f'{args.model}_{args.d}d_{"sc_" if args.skip_conn else ""}pretask_b{args.b}_e{args.epochs}_lr{"{:f}".format(args.lr).split(".")[-1]}_t{curr_time}'
+                sc = "sc_" if args.skip_conn else ""
+                run_name = f'{args.model}_{args.d}d_{sc}pretask_b{args.b}_e{args.epochs}_lr{"{:f}".format(args.lr).split(".")[-1]}_t{curr_time}'
             elif args.model == 'cluster':
                 run_name = f'{args.model}_{args.d}d_k{args.k}_pretask_b{args.b}_e{args.epochs}_lr{"{:f}".format(args.lr).split(".")[-1]}_t{curr_time}'
             folder_name = args.model + '_' + args.n + '_pretrain'

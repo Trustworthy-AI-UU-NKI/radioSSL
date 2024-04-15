@@ -16,9 +16,8 @@ def get_dataloader(args):
         phase = 'finetune'  # Because finetune and test use the same dataloader
     else:
         phase = args.phase
-    # Model corrections when finetuning
-    if args.model in ['genesis', 'imagenet', 'scratch', 'cluster'] and phase == 'finetune':  # Attention: phase and not args.phase
-        model = 'pcrlv2'  # Because those models and pcrlv2 use the same dataloader during finetuning (cluster has its own during pretraining)
+    if 'cluster' in args.model:  # Cluster models (cluster, cluster_att) use the same dataloader for the pretask
+        model = 'cluster'
     else:
         model = args.model
     if args.phase == 'pretask':

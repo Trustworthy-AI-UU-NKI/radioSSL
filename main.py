@@ -18,7 +18,7 @@ if __name__ == '__main__':
                         help='Path to dataset')
     parser.add_argument('--data_raw', metavar='DIR', default=None,
                         help='Path to unprocessed dataset (This is needed only for the clustering pretask for visualization)')
-    parser.add_argument('--model', metavar='MODEL', default='pcrlv2', choices=['cluster','pcrlv2','genesis','imagenet','scratch'], help='Choose the model')
+    parser.add_argument('--model', metavar='MODEL', default='pcrlv2', choices=['cluster','cluster_att','pcrlv2','genesis','imagenet','scratch'], help='Choose the model')
     parser.add_argument('--phase', default='pretask', choices=['pretask', 'finetune', 'test'], type=str, help='Choose phase: pretask or finetune or test')
     parser.add_argument('--pretrained', default='encoder', choices=['all', 'encoder', 'none'], type=str, help='Choose what is pretrained: all or encoder or none')
     parser.add_argument('--finetune', default='all', choices=['all', 'decoder', 'last'], type=str, help='Choose what to finetune: all or decoder or last')

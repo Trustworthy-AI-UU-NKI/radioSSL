@@ -88,7 +88,7 @@ def train_3d(args, data_loader, run_dir, out_channel=3, writer=None):
         cosine = cosine.cuda()
         cudnn.benchmark = True
 
-    grid_preds = []  # Clustering task predictions to visualize in grid (epoch X image) 
+    grid_pred_all = []  # Clustering task predictions to visualize in a grid (epoch X image) for each scale
 
     for epoch in range(0, args.epochs + 1):
 
@@ -122,28 +122,35 @@ def train_3d(args, data_loader, run_dir, out_channel=3, writer=None):
             print("==> validating...")
             
             # Validate
-            row_preds = val_cluster_inner(args, epoch, val_loader, model, colors)
-            grid_preds.extend(row_preds)
-
-            # Plot grid of predictions for sampled epochs up to now
+            row_pred_all = val_cluster_inner(args, epoch, val_loader, model, colors)  # Array of a row for each scale to add to the grid of each scale
+            
+            # Add row to corresponding grid for each scale
+            if len(grid_pred_all) == 0:
+                grid_pred_all = row_pred_all
+            else:
+                for i in range(len(row_pred_all)):
+                    grid_pred_all[i].extend(row_pred_all[i])
+            
+            n_scales = len(grid_pred_all)
             n_cols = min(10,args.b)
-            n_rows = len(grid_preds) // n_cols
-            fig, axes = plt.subplots(n_rows, n_cols, figsize=(15, 15*(n_rows/n_cols)))
-            for i, ax in enumerate(axes.flat):
-                ax.imshow(grid_preds[i])
-                ax.axis('off')  # Turn off axis labels
-                if i % n_cols:
-                    ax.set_ylabel(f'Epoch {epoch}', rotation=0, size='large')
-
-            plt.tight_layout()  # Adjust spacing between subplots
-
-            # Save grid to buffer and then log on tensorboard
-            buf = io.BytesIO()
-            plt.savefig(buf, format='png', bbox_inches='tight', dpi=100)
-            buf.seek(0)
-            grid = PIL.Image.open(buf)
-            grid = t.pil_to_tensor(grid)
-            writer.add_image('img/val/grid', img_tensor=grid, global_step=epoch)
+            n_rows = len(grid_pred_all[0]) // n_cols
+            
+            # Plot for every scale its grid of predictions for sampled epochs up to now
+            for sc in range(n_scales):
+                fig, axes = plt.subplots(n_rows, n_cols, figsize=(15, 15*(n_rows/n_cols)))
+                for i, ax in enumerate(axes.flat):
+                    ax.imshow(grid_pred_all[sc][i]) 
+                    ax.axis('off')  # Turn off axis labels
+                    if i % n_cols:
+                        ax.set_ylabel(f'Epoch {epoch}', rotation=0, size='large')
+                plt.tight_layout()  # Adjust spacing between subplots
+                # Save grid to buffer and then log on tensorboard
+                buf = io.BytesIO()
+                plt.savefig(buf, format='png', bbox_inches='tight', dpi=100)
+                buf.seek(0)
+                grid = PIL.Image.open(buf)
+                grid = t.pil_to_tensor(grid)
+                writer.add_image(f'img/val/grid_{sc}', img_tensor=grid, global_step=epoch)
 
         # Save model
         if epoch % 100 == 0 or epoch == 240:
@@ -300,11 +307,11 @@ def train_cluster_inner(args, epoch, train_loader, model, optimizer, criterion, 
         ## SwAV Loss
         loss1 = []
         n_scales = len(emb1_all)
-        for i in range(n_scales):  # For each scale
-            emb1 = emb1_all[i]
-            emb2 = emb2_all[i]
-            pred1 = pred1_all[i]
-            pred2 = pred2_all[i]
+        for sc in range(n_scales):  # For each scale
+            emb1 = emb1_all[sc]
+            emb2 = emb2_all[sc]
+            pred1 = pred1_all[sc]
+            pred2 = pred2_all[sc]
 
             # Normalize D dimension (BxNxD)
             emb1 = nn.functional.normalize(emb1, dim=2, p=2)  
@@ -320,8 +327,8 @@ def train_cluster_inner(args, epoch, train_loader, model, optimizer, criterion, 
                 cos_sim1 = torch.matmul(emb1, proto.t())  # BxNxK
                 cos_sim2 = torch.matmul(emb2, proto.t())
 
-                N = model.module.patch_num[i]
-                PH, PW, PD = model.module.patch_dim[i]
+                N = model.module.patch_num[sc]
+                PH, PW, PD = model.module.patch_dim[sc]
                 K = model.module.proto_num
 
                 # Flatten batch and patch num dimensions of similarity matrices (BxNxK -> B*NxK), and transpose matrices (KxB*N) for sinkhorn algorithm
@@ -363,7 +370,7 @@ def train_cluster_inner(args, epoch, train_loader, model, optimizer, criterion, 
 
             loss1.append(scale_swav_loss)
 
-            # Plot predictions on tensorboard  # TODO: plot every scale
+            # Plot predictions on tensorboard
             with torch.no_grad():
                 b_idx = 0
                 if args.vis and idx==b_idx and epoch % 10 == 0:
@@ -402,11 +409,11 @@ def train_cluster_inner(args, epoch, train_loader, model, optimizer, criterion, 
                     pred2 = pred2.repeat((3,1,1)).permute(1,2,0)
                     gt1 = gt1.repeat((3,1,1)).permute(1,2,0)
                     gt2 = gt2.repeat((3,1,1)).permute(1,2,0)
-                    for j in range(colors.shape[0]):
-                        pred1[pred1[:,:,0] == j] = colors[j]
-                        pred2[pred2[:,:,0] == j] = colors[j]
-                        gt1[gt1[:,:,0] == j] = colors[j]
-                        gt2[gt2[:,:,0] == j] = colors[j]
+                    for c in range(colors.shape[0]):
+                        pred1[pred1[:,:,0] == c] = colors[c]
+                        pred2[pred2[:,:,0] == c] = colors[c]
+                        gt1[gt1[:,:,0] == c] = colors[c]
+                        gt2[gt2[:,:,0] == c] = colors[c]
                     pred1 = pred1.permute(2,1,0)
                     pred2 = pred2.permute(2,1,0)
                     gt1 = gt1.permute(2,1,0)
@@ -426,8 +433,8 @@ def train_cluster_inner(args, epoch, train_loader, model, optimizer, criterion, 
                     gt_img = torch.cat((gt1,gt2),dim=3).squeeze(0).cpu().detach().numpy()
 
                     in_img_name = 'img/train/raw' 
-                    pred_img_name = f'img/train/pred_{i}'
-                    gt_img_name = f'img/train/gt_{i}'
+                    pred_img_name = f'img/train/pred_{sc}'
+                    gt_img_name = f'img/train/gt_{sc}'
 
                     writer.add_image(in_img_name, img_tensor=in_img, global_step=epoch, dataformats='CHW')
                     writer.add_image(pred_img_name, img_tensor=pred_img, global_step=epoch, dataformats='CHW')   
@@ -490,7 +497,9 @@ def val_cluster_inner(args, epoch, val_loader, model, colors):
 
     with torch.no_grad():
 
-        grid_preds = []  # For plotting a grid epoch X image: A row of predicted cluster assignments for each image in the current epoch
+        # This array is for plotting a grid epoch X image for each scale:
+        # Each row contains the predicted cluster assignments of a specific scale for each image in the current epoch
+        grid_pred_all = []  
 
         model.eval()
 
@@ -500,8 +509,6 @@ def val_cluster_inner(args, epoch, val_loader, model, colors):
                 continue  # Validate only batch 2
 
             B, _, H, W, D = image.shape
-            N = model.module.patch_num
-            PH, PW, PD = model.module.patch_dim
             K = model.module.proto_num
 
             # Keep only modality 0
@@ -514,40 +521,50 @@ def val_cluster_inner(args, epoch, val_loader, model, colors):
                 gt = gt.cuda()
 
             # Get embeddings and predictions
-            _, pred = model(x)
+            _, pred_all = model(x)
 
-            # Convert to probabilities
-            pred = pred.softmax(2)
+            n_scales = len(pred_all)
+            for sc in range(n_scales):  # For each scale
 
-            # Convert prediction to (soft) cluster masks (restore spatial position of pooled image)
-            NPH = H//PH  # Num patches at X
-            NPW = W//PW  # Num patches at Y
-            NPD = D//PD  # Num patches at Z
-            pred = pred.permute(0,2,1).reshape((B,K,NPH,NPW,NPD))
+                grid_pred = []  # Contains the grid predictions of a specific scale
 
-            # Gather predictions to visualize on grid
-            n_images = min(10,args.b)  # The number of images to sample from for the grid (10 or all images if total less than 10)
-            # If first epoch, add the input images as the first row of the grid
-            if epoch == 0:  
-                for img_idx in range(n_images):
-                    x_i = x[img_idx,0,:,:,D//2]                   
-                    x_i = (x_i - x_i.min())/(x_i.max() - x_i.min())  # Min-max norm input images
-                    x_i = x_i.repeat((3,1,1)).permute(1,2,0)  # Convert to RGB and move channel dim to the end
-                    x_i = x_i.cpu().detach()
-                    grid_preds.append(x_i)
-            # Next, add the predictions for each image at the current epoch as the next row
-            for img_idx in range(n_images): 
-                pred_i = pred[img_idx,:,:,:,NPD//2].argmax(dim=0).unsqueeze(0)  # Take only hard cluster assignment (argmax)
-                pred_i = f.interpolate(pred_i.float().unsqueeze(0), size=(H,W)).squeeze(0)  # Interpolate cluster masks to original input shape
-                pred_i = pred_i.repeat((3,1,1)).permute(1,2,0)  # Convert to RGB and move channel dim to the end
-                pred_i = pred_i.cpu().detach() # Send pred and color tensors to cpu
-                colors = colors.cpu()
-                for i in range(colors.shape[0]):  # Give color to each cluster in cluster masks
-                    pred_i[pred_i[:,:,0] == i] = colors[i]
-                pred_i = pred_i.cpu().detach()
-                grid_preds.append(pred_i)
+                N = model.module.patch_num[sc]
+                PH, PW, PD = model.module.patch_dim[sc]
 
-    return grid_preds
+                pred = pred_all[sc]
+
+                # Convert to probabilities
+                pred = pred.softmax(2)
+
+                # Convert prediction to (soft) cluster masks (restore spatial position of pooled image)
+                NPH = H//PH  # Num patches at X
+                NPW = W//PW  # Num patches at Y
+                NPD = D//PD  # Num patches at Z
+                pred = pred.permute(0,2,1).reshape((B,K,NPH,NPW,NPD))
+
+                # Gather predictions to visualize on grid
+                n_images = min(10,args.b)  # The number of images to sample from for the grid (10 or all images if total less than 10)
+                if epoch == 0:  # If first epoch, add the input images as the first row of the grid
+                    for img_idx in range(n_images):
+                        x_i = x[img_idx,0,:,:,D//2]                   
+                        x_i = (x_i - x_i.min())/(x_i.max() - x_i.min())  # Min-max norm input images
+                        x_i = x_i.repeat((3,1,1)).permute(1,2,0)  # Convert to RGB and move channel dim to the end
+                        x_i = x_i.cpu().detach()
+                        grid_pred.append(x_i)
+                for img_idx in range(n_images): # Next, add the predictions for each image at the current epoch as the next row
+                    pred_i = pred[img_idx,:,:,:,NPD//2].argmax(dim=0).unsqueeze(0)  # Take only hard cluster assignment (argmax)
+                    pred_i = f.interpolate(pred_i.float().unsqueeze(0), size=(H,W)).squeeze(0)  # Interpolate cluster masks to original input shape
+                    pred_i = pred_i.repeat((3,1,1)).permute(1,2,0)  # Convert to RGB and move channel dim to the end
+                    pred_i = pred_i.cpu().detach() # Send pred and color tensors to cpu
+                    colors = colors.cpu()
+                    for c in range(colors.shape[0]):  # Give color to each cluster in cluster masks
+                        pred_i[pred_i[:,:,0] == c] = colors[c]
+                    pred_i = pred_i.cpu().detach()
+                    grid_pred.append(pred_i)
+                
+                grid_pred_all.append(grid_pred)
+
+    return grid_pred_all
 
 
 def train_cluster_3d(args, data_loader, run_dir, out_channel=3, writer=None):

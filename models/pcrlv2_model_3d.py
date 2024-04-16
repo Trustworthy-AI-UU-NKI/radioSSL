@@ -36,11 +36,11 @@ class LUConv(nn.Module):
 
 def _make_nConv(in_channel, depth, act, norm, double_chnnel=False):
     if double_chnnel:
-        layer1 = LUConv(in_channel, 32 * (2 ** (depth + 1)), act, norm)
-        layer2 = LUConv(32 * (2 ** (depth + 1)), 32 * (2 ** (depth + 1)), act, norm)
+        layer1 = LUConv(in_channel, 8 ** (depth + 1), act, norm)
+        layer2 = LUConv(8 ** (depth + 1), 8 ** (depth + 1), act, norm)
     else:
-        layer1 = LUConv(in_channel, 32 * (2 ** depth), act, norm)
-        layer2 = LUConv(32 * (2 ** depth), 32 * (2 ** depth) * 2, act, norm)
+        layer1 = LUConv(in_channel, 8 ** depth, act, norm)
+        layer2 = LUConv(8 ** depth, 8 ** (depth + 1), act, norm)
 
     return nn.Sequential(layer1, layer2)
 
@@ -54,7 +54,7 @@ class UpTransition(nn.Module):
             self.ops = _make_nConv(inChans + outChans//2, depth, act, norm, double_chnnel=True)
         else:
             self.ops = _make_nConv(outChans, depth, act, norm, double_chnnel=True)
-        channels = 32 * (2 ** depth) * 2
+        channels = (8 ** depth) * 2
         self.bn = nn.BatchNorm1d(channels)
         self.predictor_head = nn.Sequential(nn.Linear(channels, 2 * channels),
                                             nn.BatchNorm1d(2 * channels),
@@ -155,32 +155,30 @@ class PCRLv23d(nn.Module):
 class Cluster3d(nn.Module):
     def __init__(self, n_clusters=10, act='relu', norm='bn', in_channels=1):
         super(Cluster3d, self).__init__()
+
+        self.patch_num = [8, 64, 512, 4096]  # Number of patches N for each scale
+        self.patch_dim = [(32,32,16),(16,16,8),(8,8,4),(4,4,2)]  # Patch dims P1 x P2 x P3 for each scale
         self.maxpool = nn.MaxPool3d(2)
-        self.down_tr64 = DownTransition(in_channels, 0, act, norm)
-        self.down_tr128 = DownTransition(64, 1, act, norm)
-        self.down_tr256 = DownTransition(128, 2, act, norm)
-        self.down_tr512 = DownTransition(256, 3, act, norm)
+        self.down_tr = [DownTransition(scale, i, act, norm) for i, scale in enumerate([in_channels,] + self.patch_num[:-1])]
         self.avg_pool = nn.AdaptiveAvgPool3d((1, 1, 1))
         self.sigmoid = nn.Sigmoid()
 
         # Clustering Pretask Head
-        self.patch_dim = [(64,64,32),(32,32,16),(16,16,8),(8,8,4)]  # Patch dims P1 x P2 x P3 for each scale
-        self.patch_num = [64, 128, 256, 512]  # Number of patches N for each scale
         self.emb_dim = 64  # D
         self.proto_num = n_clusters  # K
         self.cluster_projection_head = [nn.Linear(self.patch_dim[i][0]*self.patch_dim[i][1]*self.patch_dim[i][2], self.emb_dim) for i in range(0,4)]  # Projection head
-        self.prototypes = nn.Linear(self.emb_dim, self.proto_num, bias=False)
+        self.prototypes = nn.Linear(self.emb_dim, self.proto_num, bias=False)  # Prototypes 
 
     def forward(self, x, local=False):
 
-        # Forward pass
-        self.skip_out64 = self.down_tr64(x)
-        self.skip_out128 = self.down_tr128(self.maxpool(self.skip_out64))
-        self.skip_out256 = self.down_tr256(self.maxpool(self.skip_out128))
-        self.out512 = self.down_tr512(self.maxpool(self.skip_out256))
+        # Forward down transitions at every scale
+        out_down0 = self.maxpool(self.down_tr[0](x))
+        out_down1  = self.maxpool(self.down_tr[1](out_down0))
+        out_down2  = self.maxpool(self.down_tr[2](out_down1))
+        out_down3  = self.maxpool(self.down_tr[3](out_down2)) # Careful with the maxpool at this scale, because SegmentationModel doesn't have it normally
 
         # Get feature maps at every scale
-        feat = [self.skip_out64, self.skip_out128, self.skip_out256, self.out512]
+        feat = [out_down0,out_down1,out_down2,out_down3]
 
         # Flatten spatial dims P1,P2,P3 of feature maps (B x N x P1 x P2 x P3) at every scale
         flat_feat = [f.flatten(start_dim=2,end_dim=4) for f in feat]
@@ -190,7 +188,7 @@ class Cluster3d(nn.Module):
         out = []
         for i in range(0,4):
             emb.append(self.cluster_projection_head[i](flat_feat[i]))
-            out.append(self.prototypes[i](emb[i]))
+            out.append(self.prototypes(emb[i]))
 
         return emb, out
 
@@ -211,40 +209,39 @@ class SegmentationModel(nn.Module):
     # to what is in the actual prototxt, not the intent
     def __init__(self, n_class=1, act='relu', norm='bn', in_channels=1, low_dim=128, student=False, skip_conn=False):
         super(SegmentationModel, self).__init__()
+        
+        self.scales = [8, 64, 512, 4096]
         self.maxpool = nn.MaxPool3d(2)
-        self.down_tr64 = DownTransition(in_channels, 0, act, norm)
-        self.down_tr128 = DownTransition(64, 1, act, norm)
-        self.down_tr256 = DownTransition(128, 2, act, norm)
-        self.down_tr512 = DownTransition(256, 3, act, norm)
+        self.down_tr = [DownTransition(scale, i, act, norm) for i, scale in [in_channels,]+scales[:-1]]
         self.avg_pool = nn.AdaptiveAvgPool3d((1, 1, 1))
-        self.up_tr256 = UpTransition(512, 512, 2, act, norm, skip_conn=skip_conn)
-        self.up_tr128 = UpTransition(256, 256, 1, act, norm, skip_conn=skip_conn)
-        self.up_tr64 = UpTransition(128, 128, 0, act, norm, skip_conn=skip_conn)
-        self.out_tr = OutputTransition(64, n_class)
+        self.up_tr = [UpTransition(scale, scale, len(scales)-i, act, norm, skip_conn=skip_conn) for i, scale in scales[1:]]
+        self.out_tr = OutputTransition(scales[0], n_class)
         self.sigmoid = nn.Sigmoid()
         self.skip_conn = skip_conn
 
     def forward(self, x):
-        b = x.shape[0]
-        self.skip_out64 = self.down_tr64(x)
-        self.skip_out128 = self.down_tr128(self.maxpool(self.skip_out64))
-        self.skip_out256 = self.down_tr256(self.maxpool(self.skip_out128))
-        self.out512 = self.down_tr512(self.maxpool(self.skip_out256))
-        middle_masks = []
-        middle_features = []
-        if self.skip_conn:
-            out_up_256 = self.up_tr256(self.out512, skip_x=self.skip_out256, pretrain=False)
-        else:
-            out_up_256 = self.up_tr256(self.out512, pretrain=False)
-        if self.skip_conn:
-            out_up_128 = self.up_tr128(out_up_256, skip_x=self.skip_out128, pretrain=False)
-        else:
-            out_up_128 = self.up_tr128(out_up_256, pretrain=False)
-        if self.skip_conn:
-            out_up_64 = self.up_tr64(out_up_128, skip_x=self.skip_out64, pretrain=False)
-        else:
-            out_up_64 = self.up_tr64(out_up_128, pretrain=False)
 
-        # normal decoder
-        out = self.out_tr(out_up_64, )
+        # Encoder (down transitions)
+        out_down0 = self.down_tr[0](x)
+        out_down1  = self.down_tr[1](self.maxpool(out_down0))
+        out_down2  = self.down_tr[2](self.maxpool(out_down1))
+        out_down3  = self.down_tr[3](self.maxpool(out_down2))
+
+        # Decoder (up transitions)
+        if self.skip_conn:
+            out_up3 = self.up_tr[3](out_down3, skip_x=out_down2, pretrain=False)
+        else:
+            out_up3 = self.up_tr[3](out_down3, pretrain=False)
+        if self.skip_conn:
+            out_up2 = self.up_tr[2](out_down2, skip_x=out_down1, pretrain=False)
+        else:
+            out_up2 = self.up_tr[2](out_down2, pretrain=False)
+        if self.skip_conn:
+            out_up1 = self.up_tr[1](out_down1, skip_x=out_down0, pretrain=False)
+        else:
+            out_up1 = self.up_tr[1](out_down1, pretrain=False)
+        
+        # Output 
+        out = self.out_tr(out_up1)
+
         return out

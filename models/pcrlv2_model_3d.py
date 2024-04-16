@@ -212,10 +212,10 @@ class SegmentationModel(nn.Module):
         
         self.scales = [8, 64, 512, 4096]
         self.maxpool = nn.MaxPool3d(2)
-        self.down_tr = nn.ModuleList([DownTransition(scale, i, act, norm) for i, scale in [in_channels,]+scales[:-1]])
+        self.down_tr = nn.ModuleList([DownTransition(scale, i, act, norm) for i, scale in enumerate([in_channels,] + self.scales[:-1])])
         self.avg_pool = nn.AdaptiveAvgPool3d((1, 1, 1))
-        self.up_tr = nn.ModuleList([UpTransition(scale, scale, len(scales)-i, act, norm, skip_conn=skip_conn) for i, scale in scales[1:]])
-        self.out_tr = OutputTransition(scales[0], n_class)
+        self.up_tr = nn.ModuleList([UpTransition(scale, scale, i, act, norm, skip_conn=skip_conn) for i, scale in enumerate(self.scales[1:])])
+        self.out_tr = OutputTransition(self.scales[0], n_class)
         self.sigmoid = nn.Sigmoid()
         self.skip_conn = skip_conn
 

@@ -154,9 +154,9 @@ def prepare_model(args, in_channels, n_class):
             if args.pretrained == 'encoder' or args.pretrained == 'all':
                 # Load pretrained encoder
                 if args.d == 3:
-                    first_conv_weight = state_dict['down_tr64.ops.0.conv1.weight']
+                    first_conv_weight = state_dict['down_tr.0.ops.0.conv1.weight']
                     first_conv_weight = first_conv_weight.repeat((1, in_channels, 1, 1, 1))
-                    state_dict['down_tr64.ops.0.conv1.weight'] = first_conv_weight
+                    state_dict['down_tr.0.ops.0.conv1.weight'] = first_conv_weight
                     pretrain_dict.update({k: v for k, v in state_dict.items() if
                                 k in model_dict and 'down_tr' in k})
                 elif args.d == 2:

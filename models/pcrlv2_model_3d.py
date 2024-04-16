@@ -159,14 +159,14 @@ class Cluster3d(nn.Module):
         self.patch_num = [8, 64, 512, 4096]  # Number of patches N for each scale
         self.patch_dim = [(32,32,16),(16,16,8),(8,8,4),(4,4,2)]  # Patch dims P1 x P2 x P3 for each scale
         self.maxpool = nn.MaxPool3d(2)
-        self.down_tr = [DownTransition(scale, i, act, norm) for i, scale in enumerate([in_channels,] + self.patch_num[:-1])]
+        self.down_tr = nn.ModuleList([DownTransition(scale, i, act, norm) for i, scale in enumerate([in_channels,] + self.patch_num[:-1])])  # Down transition for each scale
         self.avg_pool = nn.AdaptiveAvgPool3d((1, 1, 1))
         self.sigmoid = nn.Sigmoid()
 
         # Clustering Pretask Head
         self.emb_dim = 64  # D
         self.proto_num = n_clusters  # K
-        self.cluster_projection_head = [nn.Linear(self.patch_dim[i][0]*self.patch_dim[i][1]*self.patch_dim[i][2], self.emb_dim) for i in range(0,4)]  # Projection head
+        self.cluster_projection_head = nn.ModuleList([nn.Linear(self.patch_dim[i][0]*self.patch_dim[i][1]*self.patch_dim[i][2], self.emb_dim) for i in range(0,4)])  # Projection head for each scale
         self.prototypes = nn.Linear(self.emb_dim, self.proto_num, bias=False)  # Prototypes 
 
     def forward(self, x, local=False):
@@ -212,9 +212,9 @@ class SegmentationModel(nn.Module):
         
         self.scales = [8, 64, 512, 4096]
         self.maxpool = nn.MaxPool3d(2)
-        self.down_tr = [DownTransition(scale, i, act, norm) for i, scale in [in_channels,]+scales[:-1]]
+        self.down_tr = nn.ModuleList([DownTransition(scale, i, act, norm) for i, scale in [in_channels,]+scales[:-1]])
         self.avg_pool = nn.AdaptiveAvgPool3d((1, 1, 1))
-        self.up_tr = [UpTransition(scale, scale, len(scales)-i, act, norm, skip_conn=skip_conn) for i, scale in scales[1:]]
+        self.up_tr = nn.ModuleList([UpTransition(scale, scale, len(scales)-i, act, norm, skip_conn=skip_conn) for i, scale in scales[1:]])
         self.out_tr = OutputTransition(scales[0], n_class)
         self.sigmoid = nn.Sigmoid()
         self.skip_conn = skip_conn

@@ -11,7 +11,7 @@ class LUConv(nn.Module):
         if norm == 'bn':
             self.bn1 = nn.BatchNorm3d(num_features=out_chan, momentum=0.1, affine=True)
         elif norm == 'gn':
-            self.bn1 = nn.GroupNorm(num_groups=8, num_channels=out_chan, eps=1e-05, affine=True)
+            self.bn1 = nn.GroupNorm(num_groups=4, num_channels=out_chan, eps=1e-05, affine=True)
         elif norm == 'in':
             self.bn1 = nn.InstanceNorm3d(num_features=out_chan, momentum=0.1, affine=True)
         else:
@@ -39,8 +39,8 @@ def _make_nConv(in_channel, depth, act, norm, double_chnnel=False):
         layer1 = LUConv(in_channel, 8 ** (depth + 1), act, norm)
         layer2 = LUConv(8 ** (depth + 1), 8 ** (depth + 1), act, norm)
     else:
-        layer1 = LUConv(in_channel, 8 ** depth, act, norm)
-        layer2 = LUConv(8 ** depth, 8 ** (depth + 1), act, norm)
+        layer1 = LUConv(in_channel, 8 ** (depth + 1) // 2, act, norm)
+        layer2 = LUConv(8 ** (depth + 1) // 2, 8 ** (depth + 1), act, norm)
 
     return nn.Sequential(layer1, layer2)
 
@@ -54,7 +54,7 @@ class UpTransition(nn.Module):
             self.ops = _make_nConv(inChans + outChans//2, depth, act, norm, double_chnnel=True)
         else:
             self.ops = _make_nConv(outChans, depth, act, norm, double_chnnel=True)
-        channels = (8 ** depth) * 2
+        channels = 8 ** (depth + 1)
         self.bn = nn.BatchNorm1d(channels)
         self.predictor_head = nn.Sequential(nn.Linear(channels, 2 * channels),
                                             nn.BatchNorm1d(2 * channels),

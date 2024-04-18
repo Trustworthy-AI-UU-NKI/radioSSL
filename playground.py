@@ -20,14 +20,16 @@ for folder_path, _, file_names in os.walk(root_folder):
         paths.append(rel_folder_path.split('/')[-1])
 
 N = len(paths)
-num_zeros = int(N * 0.6)
-num_ones = int(N * 0.2)
-num_twos = N - num_zeros - num_ones
+num_train = int(N * 0.3)
+num_valid = int(N * 0.1)
+num_test = int(N * 0.1)
+num_none = N - num_train - num_valid - num_test
 
 # Create an array with the specified distribution
 choice = np.zeros(N, dtype=int)
-choice[num_zeros:num_zeros+num_ones] = 1
-choice[num_zeros+num_ones:] = 2
+choice[num_train:num_train+num_valid] = 1
+choice[num_train+num_valid:num_train+num_valid+num_test] = 2
+choice[num_train+num_valid+num_test:] = 3
 
 # Shuffle the array
 np.random.shuffle(choice)
@@ -39,6 +41,8 @@ for i in range(len(paths)):
         valid.append(paths[i])
     elif choice[i] == 2:
         test.append(paths[i])
+    elif choice[i] == 3:
+        pass
 
 
 with open('train_val_txt/lidc_train.txt', 'w') as file:

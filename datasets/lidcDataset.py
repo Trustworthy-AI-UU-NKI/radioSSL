@@ -13,7 +13,10 @@ from torch.nn import functional as f
 import torchio.transforms
 
 class LidcFineTune(Dataset):
-    def __init__(self, config, img_list, crop_size=(128, 128, 64), train=False):  # 64 because some raw data don't have many slices
+    def __init__(self, config, img_list, crop_size=(128, 128, 64), train=False): 
+        # crop_size[0] = 112, because segmentation masks are very small and we dont want to crop an empty part
+        # (we resize to 128 and crop 112, and then resize to 128 again)
+        # crop_size[1] = 64 because some raw data don't have many slices
         self.config = config
         self.train = train
         self.img_list = img_list
@@ -48,27 +51,27 @@ class LidcFineTune(Dataset):
         bbox = ann.bbox()
         y[bbox[0].start:bbox[0].stop,bbox[1].start:bbox[1].stop,bbox[2].start:bbox[2].stop] = mask
         
-        # Resize
+        # Resize to 1/4 scale (512 -> 128)
         x = x.T.unsqueeze(1) # Move slice dim to batch dim and add temporary channel dimension (H x W x D) -> (D x 1 x H x W)
         y = y.T.unsqueeze(1)
-        x = f.interpolate(x, scale_factor=(0.5,0.5))  # Scale only height and weight, not slice dim
-        y = f.interpolate(y, scale_factor=(0.5,0.5))
+        x = f.interpolate(x, scale_factor=(0.25,0.25))  # Scale only height and weight, not slice dim
+        y = f.interpolate(y, scale_factor=(0.25,0.25))
         x = x.permute(1,2,3,0)  # Put slice dim last (D x 1 x H x W -> 1 x H x W x D)
         y = y.permute(1,2,3,0)
         
-        x, y = self.aug_sample(x, y)
+        x, y = self.aug_sample(x, y, y_bbox=bbox)
 
         # min max
         x = self.normalize(x)
 
         return x, y
     
-    def aug_sample(self, x, y):
+    def aug_sample(self, x, y, y_bbox):
         if self.train:
             # Random crop and augment
             x, y = self.random_crop(x, y)
             if random.random() < 0.5:
-                x = torch.flip(x, dims=(1,))
+                x = torch.flip(x, dims=(1,))  # torch.flip not the source of the major slowdown
                 y = torch.flip(y, dims=(1,))
             if random.random() < 0.5:
                 x = torch.flip(x, dims=(2,))
@@ -76,13 +79,20 @@ class LidcFineTune(Dataset):
             if random.random() < 0.5:
                 x = torch.flip(x, dims=(3,))
                 y = torch.flip(y, dims=(3,))
+            # Resize crop from (112 to 128)
+            x = x.T.unsqueeze(1) # Move slice dim to batch dim and add temporary channel dimension (H x W x D) -> (D x 1 x H x W)
+            y = y.T.unsqueeze(1)
+            x = f.interpolate(x, size=(128,128))  # Scale only height and weight, not slice dim
+            y = f.interpolate(y, scale_factor=(128,128))
+            x = x.permute(1,2,3,0)  # Put slice dim last (D x 1 x H x W -> 1 x H x W x D)
+            y = y.permute(1,2,3,0)
         else:
-            # Center crop
-            x, y = self.center_crop(x, y)
+            # Do not center crop for LIDC ()
+            # x, y = self.center_crop(x, y)
         
         return x, y
 
-    def random_crop(self, x, y):
+    def random_crop(self, x, y, y_bbox):
         """
         Args:
             x: 4d array, [channel, h, w, d]

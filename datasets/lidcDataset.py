@@ -34,11 +34,11 @@ class LidcFineTune(Dataset):
         x = torch.from_numpy(np.load(mask_path))
         y = torch.from_numpy(np.load(seg_path))
 
-        # Resize
+        # Resize to 1/4 scale (512 -> 128)
         x = x.T.unsqueeze(1) # Move slice dim to batch dim and add temporary channel dimension (H x W x D) -> (D x 1 x H x W)
         y = y.T.unsqueeze(1)
-        x = f.interpolate(x, scale_factor=(0.5,0.5))  # Scale only height and weight, not slice dim
-        y = f.interpolate(y, scale_factor=(0.5,0.5))
+        x = f.interpolate(x, scale_factor=(0.25,0.25))  # Scale only height and weight, not slice dim
+        y = f.interpolate(y, scale_factor=(0.25,0.25))
         x = x.permute(1,2,3,0)  # Put slice dim last (D x 1 x H x W -> 1 x H x W x D)
         y = y.permute(1,2,3,0)
         
@@ -54,7 +54,7 @@ class LidcFineTune(Dataset):
             # Random crop and augment
             x, y = self.random_crop(x, y)
             if random.random() < 0.5:
-                x = torch.flip(x, dims=(1,))
+                x = torch.flip(x, dims=(1,))  # torch.flip not the source of the major slowdown
                 y = torch.flip(y, dims=(1,))
             if random.random() < 0.5:
                 x = torch.flip(x, dims=(2,))
@@ -62,9 +62,19 @@ class LidcFineTune(Dataset):
             if random.random() < 0.5:
                 x = torch.flip(x, dims=(3,))
                 y = torch.flip(y, dims=(3,))
+                
+            # Resize crop from (112 to 128)
+            x = x.T.unsqueeze(1) # Move slice dim to batch dim and add temporary channel dimension (H x W x D) -> (D x 1 x H x W)
+            y = y.T.unsqueeze(1)
+            x = f.interpolate(x, size=(128,128))  # Scale only height and weight, not slice dim
+            y = f.interpolate(y, scale_factor=(128,128))
+            x = x.permute(1,2,3,0)  # Put slice dim last (D x 1 x H x W -> 1 x H x W x D)
+            y = y.permute(1,2,3,0)
+
         else:
-            # Center crop
-            x, y = self.center_crop(x, y)
+            # Do not center crop for LIDC ()
+            # x, y = self.center_crop(x, y)
+            pass
         
         return x, y
 

@@ -214,7 +214,7 @@ class SegmentationModel(nn.Module):
         self.maxpool = nn.MaxPool3d(2)
         self.down_tr = nn.ModuleList([DownTransition(scale, i, act, norm) for i, scale in enumerate([in_channels,] + self.scales[:-1])])
         self.avg_pool = nn.AdaptiveAvgPool3d((1, 1, 1))
-        self.up_tr = nn.ModuleList([UpTransition(scale, scale, i, act, norm, skip_conn=skip_conn) for i, scale in enumerate(self.scales[1:])])
+        self.up_tr = nn.ModuleList([UpTransition(scale, scale, i, act, norm, skip_conn=skip_conn) for i, scale in reversed(list(enumerate(self.scales[1:])))])  # Ignore first scale because out_tr deals with it
         self.out_tr = OutputTransition(self.scales[0], n_class)
         self.sigmoid = nn.Sigmoid()
         self.skip_conn = skip_conn
@@ -229,17 +229,17 @@ class SegmentationModel(nn.Module):
 
         # Decoder (up transitions)
         if self.skip_conn:
-            out_up3 = self.up_tr[3](out_down3, skip_x=out_down2, pretrain=False)
+            out_up3 = self.up_tr[0](out_down3, skip_x=out_down2, pretrain=False)
         else:
-            out_up3 = self.up_tr[3](out_down3, pretrain=False)
+            out_up3 = self.up_tr[0](out_down3, pretrain=False)
         if self.skip_conn:
-            out_up2 = self.up_tr[2](out_down2, skip_x=out_down1, pretrain=False)
+            out_up2 = self.up_tr[1](out_down2, skip_x=out_down1, pretrain=False)
         else:
-            out_up2 = self.up_tr[2](out_down2, pretrain=False)
+            out_up2 = self.up_tr[1](out_down2, pretrain=False)
         if self.skip_conn:
-            out_up1 = self.up_tr[1](out_down1, skip_x=out_down0, pretrain=False)
+            out_up1 = self.up_tr[2](out_down1, skip_x=out_down0, pretrain=False)
         else:
-            out_up1 = self.up_tr[1](out_down1, pretrain=False)
+            out_up1 = self.up_tr[2](out_down1, pretrain=False)
         
         # Output 
         out = self.out_tr(out_up1)

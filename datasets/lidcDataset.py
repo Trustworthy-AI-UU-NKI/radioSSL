@@ -13,9 +13,7 @@ from torch.nn import functional as f
 import torchio.transforms
 
 class LidcFineTune(Dataset):
-    def __init__(self, config, img_list, crop_size=(112, 112, 64), train=False): 
-        # crop_size[0] = 112, because segmentation masks are very small and we dont want to crop an empty part
-        # (we resize to 128 and crop 112, and then resize to 128 again)
+    def __init__(self, config, img_list, crop_size=(128, 128, 64), train=False): 
         # crop_size[1] = 64 because our data only has 94 slices (after preprocessing)
         self.config = config
         self.train = train
@@ -28,17 +26,17 @@ class LidcFineTune(Dataset):
     def __getitem__(self, index):
         pid = self.img_list[index]
         
-        mask_path = os.path.join(config.data,pid,pid.replace('-','_') + '_raw.npy')
-        seg_path = os.path.join(config.data,pid,pid.replace('-','_') + '_seg.npy')
+        mask_path = os.path.join(self.config.data,pid,pid.replace('-','_') + '_raw.npy')
+        seg_path = os.path.join(self.config.data,pid,pid.replace('-','_') + '_seg.npy')
 
         x = torch.from_numpy(np.load(mask_path))
         y = torch.from_numpy(np.load(seg_path))
 
-        # Resize to 1/4 scale (512 -> 128)
+        # Resize from 512 to 1.5*128
         x = x.T.unsqueeze(1) # Move slice dim to batch dim and add temporary channel dimension (H x W x D) -> (D x 1 x H x W)
         y = y.T.unsqueeze(1)
-        x = f.interpolate(x, scale_factor=(0.25,0.25))  # Scale only height and weight, not slice dim
-        y = f.interpolate(y, scale_factor=(0.25,0.25))
+        x = f.interpolate(x.float(), size=(1.5*self.crop_size[0],1.5*self.crop_size[0]))  # Scale only height and weight, not slice dim
+        y = f.interpolate(y.float(), size=(1.5*self.crop_size[0],1.5*self.crop_size[0])).int()
         x = x.permute(1,2,3,0)  # Put slice dim last (D x 1 x H x W -> 1 x H x W x D)
         y = y.permute(1,2,3,0)
         
@@ -62,14 +60,6 @@ class LidcFineTune(Dataset):
             if random.random() < 0.5:
                 x = torch.flip(x, dims=(3,))
                 y = torch.flip(y, dims=(3,))
-                
-            # Resize crop from (112 to 128)
-            x = x.T.unsqueeze(1) # Move slice dim to batch dim and add temporary channel dimension (H x W x D) -> (D x 1 x H x W)
-            y = y.T.unsqueeze(1)
-            x = f.interpolate(x, size=(128,128))  # Scale only height and weight, not slice dim
-            y = f.interpolate(y, scale_factor=(128,128))
-            x = x.permute(1,2,3,0)  # Put slice dim last (D x 1 x H x W -> 1 x H x W x D)
-            y = y.permute(1,2,3,0)
 
         else:
             # Do not center crop for LIDC ()

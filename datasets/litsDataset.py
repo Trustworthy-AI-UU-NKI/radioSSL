@@ -69,7 +69,8 @@ class LitsPretask(Dataset):
             torch.tensor(gt2, dtype=torch.float), crop1_coords, crop2_coords, local_inputs
 
 class LitsFineTune(Dataset):
-    def __init__(self, ct_dir, seg_dir, crop_size=(128, 128, 128), train=False, ratio=1.0):
+    def __init__(self, ct_dir, seg_dir, crop_size=(128, 128, 64), train=False, ratio=1.0):
+        # cropped slices are 64 because our data only has 94 slices (after preprocessing)
         self.crop_size = crop_size
         self.train = train
         self.ct_list = os.listdir(ct_dir)
@@ -82,12 +83,8 @@ class LitsFineTune(Dataset):
         self.seg_list = self.seg_list[: int(len(self.seg_list) * ratio)]
 
     def __getitem__(self, index):
-
         ct_path = self.ct_list[index]
         seg_path = self.seg_list[index]
-
-        if 'volume-37.nii' in ct_path:
-            lol = 0
 
         ct = sitk.ReadImage(ct_path, sitk.sitkInt16)
         seg = sitk.ReadImage(seg_path, sitk.sitkUInt8)
@@ -117,7 +114,6 @@ class LitsFineTune(Dataset):
             end_slice = start_slice + self.crop_size[2] - 1
             ct_array = ct_array[start_slice:end_slice + 1, :, :]
             seg_array = seg_array[start_slice:end_slice + 1, :, :]
-        
         # random crop height and width
         ct_array, seg_array = self.random_crop(ct_array, seg_array)
 
@@ -129,9 +125,6 @@ class LitsFineTune(Dataset):
 
         # min max
         ct_array = (ct_array - ct_array.min()) / (ct_array.max() - ct_array.min())
-        
-        if ct_array.shape[-1] != 128:
-            raise Exception(f'{(ct_path, ct_array.shape, seg_array.shape)}')
 
         return ct_array, seg_array
 

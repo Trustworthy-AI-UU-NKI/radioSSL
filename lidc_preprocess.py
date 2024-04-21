@@ -10,6 +10,8 @@ np.random.seed(1)
 root_folder = '/projects/0/prjs0905/data/LIDC'
 save_folder = '/projects/0/prjs0905/data/LIDC_proc'
 
+overwrite = False  # Set to True if you want to overwrite existing files
+
 # Create setup file for pylidc
 txt = f"""
 [dicom]
@@ -24,11 +26,22 @@ paths = []
 for folder_path, _, file_names in os.walk(root_folder):
     rel_folder_path = os.path.relpath(folder_path,root_folder)
     depth = rel_folder_path.count(os.path.sep)
+
     if depth == 0 and 'LIDC-IDRI' in rel_folder_path:
-        paths.append(rel_folder_path.split('/')[-1])
+        pid = rel_folder_path.split('/')[-1]
+
+        if not overwrite:
+            mask_file = pid.replace('-','_') + '_raw.npy'
+            seg_file = pid.replace('-','_') + '_seg.npy'
+            if not os.path.exists(os.path.join(save_folder, pid, mask_file)) or not os.path.exists((os.path.join(save_folder, pid, seg_file))):
+                paths.append(pid)
+        if overwrite:
+            paths.append(pid)
 
 # Save images and segmentation masks as .npy files
 for pid in tqdm(paths):
+    if not overwrite:
+        print(f'Incomplete data: {pid}')
     scan = pl.query(pl.Scan).filter(pl.Scan.patient_id == pid).first()
     ann = pl.query(pl.Annotation).filter(pl.Scan.patient_id == pid).first()
     
@@ -58,8 +71,13 @@ for pid in tqdm(paths):
     if not os.path.exists(sample_path):
         os.makedirs(sample_path)
 
-    mask_path = os.path.join(sample_path,pid.replace('-','_') + '_raw.npy')
-    seg_path = os.path.join(sample_path,pid.replace('-','_') + '_seg.npy')
-    
+    mask_file = pid.replace('-','_') + '_raw.npy'
+    seg_file = pid.replace('-','_') + '_seg.npy'
+    mask_path = os.path.join(sample_path,mask_file)
+    seg_path = os.path.join(sample_path,seg_file)
+
     np.save(mask_path, x)
     np.save(seg_path, y)
+
+    
+        

@@ -13,44 +13,27 @@ from torch.nn import functional as f
 import torchio.transforms
 
 class LidcFineTune(Dataset):
-    def __init__(self, config, img_list, crop_size=(128, 128, 64), train=False): 
+    def __init__(self, config, img_list, crop_size=(112, 112, 64), train=False): 
         # crop_size[0] = 112, because segmentation masks are very small and we dont want to crop an empty part
         # (we resize to 128 and crop 112, and then resize to 128 again)
-        # crop_size[1] = 64 because some raw data don't have many slices
+        # crop_size[1] = 64 because our data only has 94 slices (after preprocessing)
         self.config = config
         self.train = train
         self.img_list = img_list
         self.crop_size = crop_size
-
-        # Create setup file for pylidc
-        txt = f"""
-        [dicom]
-        path = {config.data}
-        warn = True
-        """
-        with open(os.path.join(os.path.expanduser('~'),'.pylidcrc'), 'w') as file:
-            file.write(txt)
 
     def __len__(self):
         return len(self.img_list)
 
     def __getitem__(self, index):
         pid = self.img_list[index]
-        scan = pl.query(pl.Scan).filter(pl.Scan.patient_id == pid).first()
-        ann = pl.query(pl.Annotation).filter(pl.Scan.patient_id == pid).first()
         
-        # Image
-        try:
-            x = torch.FloatTensor(scan.to_volume())
-        except Exception as e:
-            raise RuntimeError(f"Corrupted file in {pid}. Redownload!") from e
+        mask_path = os.path.join(config.data,pid,pid.replace('-','_') + '_raw.npy')
+        seg_path = os.path.join(config.data,pid,pid.replace('-','_') + '_seg.npy')
 
-        # Segmentation mask
-        y = torch.zeros(x.shape)
-        mask = torch.FloatTensor(ann.boolean_mask())
-        bbox = ann.bbox()
-        y[bbox[0].start:bbox[0].stop,bbox[1].start:bbox[1].stop,bbox[2].start:bbox[2].stop] = mask
-        
+        x = torch.from_numpy(np.load(mask_path))
+        y = torch.from_numpy(np.load(seg_path))
+
         # Resize to 1/4 scale (512 -> 128)
         x = x.T.unsqueeze(1) # Move slice dim to batch dim and add temporary channel dimension (H x W x D) -> (D x 1 x H x W)
         y = y.T.unsqueeze(1)
@@ -59,14 +42,14 @@ class LidcFineTune(Dataset):
         x = x.permute(1,2,3,0)  # Put slice dim last (D x 1 x H x W -> 1 x H x W x D)
         y = y.permute(1,2,3,0)
         
-        x, y = self.aug_sample(x, y, y_bbox=bbox)
+        x, y = self.aug_sample(x, y)
 
         # min max
         x = self.normalize(x)
 
         return x, y
     
-    def aug_sample(self, x, y, y_bbox):
+    def aug_sample(self, x, y):
         if self.train:
             # Random crop and augment
             x, y = self.random_crop(x, y)
@@ -79,6 +62,7 @@ class LidcFineTune(Dataset):
             if random.random() < 0.5:
                 x = torch.flip(x, dims=(3,))
                 y = torch.flip(y, dims=(3,))
+                
             # Resize crop from (112 to 128)
             x = x.T.unsqueeze(1) # Move slice dim to batch dim and add temporary channel dimension (H x W x D) -> (D x 1 x H x W)
             y = y.T.unsqueeze(1)
@@ -86,13 +70,15 @@ class LidcFineTune(Dataset):
             y = f.interpolate(y, scale_factor=(128,128))
             x = x.permute(1,2,3,0)  # Put slice dim last (D x 1 x H x W -> 1 x H x W x D)
             y = y.permute(1,2,3,0)
+
         else:
             # Do not center crop for LIDC ()
             # x, y = self.center_crop(x, y)
+            pass
         
         return x, y
 
-    def random_crop(self, x, y, y_bbox):
+    def random_crop(self, x, y):
         """
         Args:
             x: 4d array, [channel, h, w, d]

@@ -69,7 +69,8 @@ class LitsPretask(Dataset):
             torch.tensor(gt2, dtype=torch.float), crop1_coords, crop2_coords, local_inputs
 
 class LitsFineTune(Dataset):
-    def __init__(self, ct_dir, seg_dir, crop_size=(128, 128, 128), train=False, ratio=1.0):
+    def __init__(self, ct_dir, seg_dir, crop_size=(128, 128, 64), train=False, ratio=1.0):
+        # cropped slices are 64 because our data only has 94 slices (after preprocessing)
         self.crop_size = crop_size
         self.train = train
         self.ct_list = os.listdir(ct_dir)
@@ -119,8 +120,8 @@ class LitsFineTune(Dataset):
         ct_array = ct_array.unsqueeze(0)
         seg_array = seg_array.unsqueeze(0)
 
-        ct_array = ct_array.permute(0,2,1,3)  # 1, S, H, W -> 1 x H x S x W
-        seg_array = seg_array.permute(0,2,1,3) 
+        ct_array = ct_array.permute(0,2,3,1)  # 1, D, H, W -> 1 x H x W x D
+        seg_array = seg_array.permute(0,2,3,1) 
 
         # min max
         ct_array = (ct_array - ct_array.min()) / (ct_array.max() - ct_array.min())

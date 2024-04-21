@@ -91,8 +91,8 @@ class BratsFineTune(Dataset):
             volumes.append(volume)  # [h, w, d]
         seg_volume = volumes[-1]
         volumes = volumes[:-1]
-        volume, seg_volume = self.aug_sample(volumes, seg_volume)
-        wt_volume = seg_volume > 0  # 坏死和无增强的肿瘤区域：1、增强区域（活跃部分）：4、周边水肿区域：2
+        volume, seg_volume = self.aug_sample(volumes, seg_volume) # 1 x H x W x D
+        wt_volume = seg_volume > 0 
         tc_volume = np.logical_or(seg_volume == 4, seg_volume == 1)
         et_volume = (seg_volume == 4)
         seg_volume = [wt_volume, tc_volume, et_volume]

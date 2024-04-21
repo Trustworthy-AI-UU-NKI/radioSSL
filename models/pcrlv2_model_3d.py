@@ -51,7 +51,7 @@ class UpTransition(nn.Module):
         self.depth = depth
         self.up_conv = nn.ConvTranspose3d(inChans, outChans, kernel_size=2, stride=2)
         if skip_conn:
-            self.ops = _make_nConv(inChans + outChans//2, depth, act, norm, double_chnnel=True)
+            self.ops = _make_nConv(inChans + outChans//8, depth, act, norm, double_chnnel=True)
         else:
             self.ops = _make_nConv(outChans, depth, act, norm, double_chnnel=True)
         channels = 8 ** (depth + 1)

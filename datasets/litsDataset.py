@@ -82,8 +82,12 @@ class LitsFineTune(Dataset):
         self.seg_list = self.seg_list[: int(len(self.seg_list) * ratio)]
 
     def __getitem__(self, index):
+
         ct_path = self.ct_list[index]
         seg_path = self.seg_list[index]
+
+        if 'volume-37.nii' in ct_path:
+            lol = 0
 
         ct = sitk.ReadImage(ct_path, sitk.sitkInt16)
         seg = sitk.ReadImage(seg_path, sitk.sitkUInt8)
@@ -113,17 +117,21 @@ class LitsFineTune(Dataset):
             end_slice = start_slice + self.crop_size[2] - 1
             ct_array = ct_array[start_slice:end_slice + 1, :, :]
             seg_array = seg_array[start_slice:end_slice + 1, :, :]
+        
         # random crop height and width
         ct_array, seg_array = self.random_crop(ct_array, seg_array)
 
         ct_array = ct_array.unsqueeze(0)
         seg_array = seg_array.unsqueeze(0)
 
-        ct_array = ct_array.permute(0,2,1,3)  # 1, S, H, W -> 1 x H x S x W
-        seg_array = seg_array.permute(0,2,1,3) 
+        ct_array = ct_array.permute(0,2,3,1)  # 1, D, H, W -> 1 x H x W x D
+        seg_array = seg_array.permute(0,2,3,1) 
 
         # min max
         ct_array = (ct_array - ct_array.min()) / (ct_array.max() - ct_array.min())
+        
+        if ct_array.shape[-1] != 128:
+            raise Exception(f'{(ct_path, ct_array.shape, seg_array.shape)}')
 
         return ct_array, seg_array
 

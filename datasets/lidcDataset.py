@@ -13,41 +13,27 @@ from torch.nn import functional as f
 import torchio.transforms
 
 class LidcFineTune(Dataset):
-    def __init__(self, config, img_list, crop_size=(128, 128, 64), train=False):  # 64 because some raw data don't have many slices
+    def __init__(self, config, img_list, crop_size=(112, 112, 64), train=False): 
+        # crop_size[0] = 112, because segmentation masks are very small and we dont want to crop an empty part
+        # (we resize to 128 and crop 112, and then resize to 128 again)
+        # crop_size[1] = 64 because our data only has 94 slices (after preprocessing)
         self.config = config
         self.train = train
         self.img_list = img_list
         self.crop_size = crop_size
-
-        # Create setup file for pylidc
-        txt = f"""
-        [dicom]
-        path = {config.data}
-        warn = True
-        """
-        with open(os.path.join(os.path.expanduser('~'),'.pylidcrc'), 'w') as file:
-            file.write(txt)
 
     def __len__(self):
         return len(self.img_list)
 
     def __getitem__(self, index):
         pid = self.img_list[index]
-        scan = pl.query(pl.Scan).filter(pl.Scan.patient_id == pid).first()
-        ann = pl.query(pl.Annotation).filter(pl.Scan.patient_id == pid).first()
         
-        # Image
-        try:
-            x = torch.FloatTensor(scan.to_volume())
-        except Exception as e:
-            raise RuntimeError(f"Corrupted file in {pid}. Redownload!") from e
+        mask_path = os.path.join(config.data,pid,pid.replace('-','_') + '_raw.npy')
+        seg_path = os.path.join(config.data,pid,pid.replace('-','_') + '_seg.npy')
 
-        # Segmentation mask
-        y = torch.zeros(x.shape)
-        mask = torch.FloatTensor(ann.boolean_mask())
-        bbox = ann.bbox()
-        y[bbox[0].start:bbox[0].stop,bbox[1].start:bbox[1].stop,bbox[2].start:bbox[2].stop] = mask
-        
+        x = torch.from_numpy(np.load(mask_path))
+        y = torch.from_numpy(np.load(seg_path))
+
         # Resize
         x = x.T.unsqueeze(1) # Move slice dim to batch dim and add temporary channel dimension (H x W x D) -> (D x 1 x H x W)
         y = y.T.unsqueeze(1)

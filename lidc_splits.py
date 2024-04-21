@@ -1,11 +1,22 @@
 import os
 import random
 import numpy as np
+from tqdm import tqdm
+import pylidc as pl
 
 random.seed(1)
 np.random.seed(1)
 
 root_folder = '/projects/0/prjs0905/data/LIDC'
+
+# Create setup file for pylidc
+txt = f"""
+[dicom]
+path = {root_folder}
+warn = True
+"""
+with open(os.path.join(os.path.expanduser('~'),'.pylidcrc'), 'w') as file:
+    file.write(txt)
 
 paths = []
 
@@ -52,5 +63,3 @@ with open('train_val_txt/lidc_valid.txt', 'w') as file:
 with open('train_val_txt/lidc_test.txt', 'w') as file:
     for path in test:
         file.write(path + '\n')
-
-print(0)

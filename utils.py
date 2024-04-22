@@ -39,7 +39,7 @@ def create_logger(args):
         folder_name = None
         
         if args.phase == 'finetune':
-            if args.model == 'cluster':
+            if 'cluster' in args.model:
                 cluster_k = re.search(r'_k[0-9]+_', args.weight).group(0)[1:]
             else:
                 cluster_k = ''
@@ -71,7 +71,7 @@ def create_logger(args):
             if args.model == 'pcrlv2':
                 sc = "sc_" if args.skip_conn else ""
                 run_name = f'{args.model}_{args.d}d_{sc}pretask_b{args.b}_e{args.epochs}_lr{"{:f}".format(args.lr).split(".")[-1]}_t{curr_time}'
-            elif args.model == 'cluster':
+            elif 'cluster' in args.model:
                 run_name = f'{args.model}_{args.d}d_k{args.k}_pretask_b{args.b}_e{args.epochs}_lr{"{:f}".format(args.lr).split(".")[-1]}_t{curr_time}'
             folder_name = args.model + '_' + args.n + '_pretrain'
         
@@ -100,12 +100,22 @@ def get_model(args, in_channels, n_class):
             model = SegmentationModel(in_channels=in_channels, n_class=n_class, norm='gn', skip_conn=args.skip_conn)
         elif args.d == 2:
             model = PCRLv2(in_channels=in_channels, n_class=n_class, segmentation=True)
-    elif args.model == 'pcrlv2' or args.model == 'cluster':
+    elif args.model == 'pcrlv2':
         if args.phase == 'finetune':
             assert args.pretrained != 'none'
             assert args.weight
         if args.d == 3:
+            multi_scale
             model = SegmentationModel(in_channels=in_channels, n_class=n_class, norm='gn', skip_conn=args.skip_conn)
+        elif args.d == 2:
+            model = PCRLv2(in_channels=in_channels, n_class=n_class)
+    elif 'cluster' in args.model:
+        if args.phase == 'finetune':
+            assert args.pretrained != 'none'
+            assert args.weight
+        if args.d == 3:
+            multi_scale = True if 'ms' in args.model else False
+            model = SegmentationModel(in_channels=in_channels, n_class=n_class, norm='gn', skip_conn=args.skip_conn, multi_scale=multi_scale)
         elif args.d == 2:
             model = PCRLv2(in_channels=in_channels, n_class=n_class)
     elif args.model == 'genesis':
@@ -166,7 +176,6 @@ def prepare_model(args, in_channels, n_class):
                     pretrain_dict.update({k: v for k, v in state_dict.items() if
                                 k in model_dict and 'encoder' in k})
                 
-            
             if args.pretrained == 'all':
                 # Load pretrained decoder
                 if args.d == 3:

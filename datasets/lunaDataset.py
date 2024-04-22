@@ -24,7 +24,7 @@ class LunaPretask(Dataset):
         self.norm = torchio.transforms.ZNormalization()
         self.global_index = [0, 1, 2, 3, 4, 5, 6, 7]
         self.local_index = [i for i in range(48)]
-        if config.model == 'cluster' :
+        if 'cluster' in config.model:
             self.coords = pd.read_csv(os.path.join(config.data,'crop_coords.csv'), names=['path','crop1','crop2'], index_col='path')  # coordinates of each pair of crops
         else:
             self.coords = None
@@ -44,7 +44,7 @@ class LunaPretask(Dataset):
         
         crop1_coords = []
         crop2_coords = []
-        if self.config.model == 'cluster':
+        if 'cluster' in config.model:
             crop1_coords = np.array(eval(self.coords.loc[relative_image_path]['crop1']))
             crop2_coords = np.array(eval(self.coords.loc[relative_image_path]['crop2']))
 

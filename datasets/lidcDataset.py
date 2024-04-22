@@ -32,11 +32,11 @@ class LidcFineTune(Dataset):
         x = torch.from_numpy(np.load(mask_path))
         y = torch.from_numpy(np.load(seg_path))
 
-        # Resize from 512 to 1.5*128
+        # Resize from 512 to 192
         x = x.T.unsqueeze(1) # Move slice dim to batch dim and add temporary channel dimension (H x W x D) -> (D x 1 x H x W)
         y = y.T.unsqueeze(1)
-        x = f.interpolate(x.float(), size=(1.5*self.crop_size[0],1.5*self.crop_size[0]))  # Scale only height and weight, not slice dim
-        y = f.interpolate(y.float(), size=(1.5*self.crop_size[0],1.5*self.crop_size[0])).int()
+        x = f.interpolate(x.float(), size=(192,192))  # Scale only height and weight, not slice dim
+        y = f.interpolate(y.float(), size=(192,192)).int()
         x = x.permute(1,2,3,0)  # Put slice dim last (D x 1 x H x W -> 1 x H x W x D)
         y = y.permute(1,2,3,0)
         
@@ -63,7 +63,7 @@ class LidcFineTune(Dataset):
 
         else:
             # Do not center crop for LIDC ()
-            # x, y = self.center_crop(x, y)
+            x, y = self.center_crop(x, y)
             pass
         
         return x, y

@@ -4,14 +4,14 @@ import torch.nn.functional as F
 
 
 class LUConv(nn.Module):
-    def __init__(self, in_chan, out_chan, act, norm):
+    def __init__(self, in_chan, out_chan, act, norm, num_groups):
         super(LUConv, self).__init__()
         self.conv1 = nn.Conv3d(in_chan, out_chan, kernel_size=3, padding=1)
 
         if norm == 'bn':
             self.bn1 = nn.BatchNorm3d(num_features=out_chan, momentum=0.1, affine=True)
         elif norm == 'gn':
-            self.bn1 = nn.GroupNorm(num_groups=4, num_channels=out_chan, eps=1e-05, affine=True)
+            self.bn1 = nn.GroupNorm(num_groups=num_groups, num_channels=out_chan, eps=1e-05, affine=True)
         elif norm == 'in':
             self.bn1 = nn.InstanceNorm3d(num_features=out_chan, momentum=0.1, affine=True)
         else:
@@ -34,33 +34,44 @@ class LUConv(nn.Module):
         return out
 
 
-def _make_nConv(in_channel, depth, act, norm, double_chnnel=False):
+def _make_nConv(in_channel, out_channel, depth, act, norm, num_groups, double_chnnel=False):
     if double_chnnel:
-        layer1 = LUConv(in_channel, 8 ** (depth + 1), act, norm)
-        layer2 = LUConv(8 ** (depth + 1), 8 ** (depth + 1), act, norm)
+        layer1 = LUConv(in_channel, out_channel, act, norm, num_groups)
+        layer2 = LUConv(out_channel, out_channel, act, norm, num_groups)
     else:
-        layer1 = LUConv(in_channel, 8 ** (depth + 1) // 2, act, norm)
-        layer2 = LUConv(8 ** (depth + 1) // 2, 8 ** (depth + 1), act, norm)
+        layer1 = LUConv(in_channel, out_channel // 2, act, norm, num_groups)
+        layer2 = LUConv(out_channel // 2, out_channel, act, norm, num_groups)
 
     return nn.Sequential(layer1, layer2)
 
 
 class UpTransition(nn.Module):
-    def __init__(self, inChans, outChans, depth, act, norm, skip_conn=False):
+    def __init__(self, inChans, outChans, depth, act, norm, skip_conn=False, multi_scale=False):
         super(UpTransition, self).__init__()
+        self.multi_scale = multi_scale
         self.depth = depth
         self.up_conv = nn.ConvTranspose3d(inChans, outChans, kernel_size=2, stride=2)
-        if skip_conn:
-            self.ops = _make_nConv(inChans + outChans//8, depth, act, norm, double_chnnel=True)
+        
+        if self_multi_scale:
+            p = 8  # Scale step (power)
+            channels = 8 ** (depth + 1)
+            num_groups = 4
         else:
-            self.ops = _make_nConv(outChans, depth, act, norm, double_chnnel=True)
-        channels = 8 ** (depth + 1)
+            p = 2  
+            channels = 32 * (2 ** (depth + 1))
+            num_groups = 8
+
+        if skip_conn:
+            self.ops = _make_nConv(inChans + outChans//p, channels, depth, act, norm, num_groups, double_chnnel=True)
+        else:
+            self.ops = _make_nConv(outChans, channels, depth, act, norm, num_groups, double_chnnel=True)
+        
         self.bn = nn.BatchNorm1d(channels)
         self.predictor_head = nn.Sequential(nn.Linear(channels, 2 * channels),
                                             nn.BatchNorm1d(2 * channels),
                                             nn.ReLU(inplace=True),
                                             nn.Linear(2 * channels, channels))
-        self.deep_supervision_head = LUConv(channels, 1, 'sigmoid', norm)
+        self.deep_supervision_head = LUConv(channels, 1, 'sigmoid', norm, num_groups)
 
     def forward(self, x, skip_x = None, pretrain=True):
         b = x.shape[0]
@@ -92,9 +103,16 @@ class OutputTransition(nn.Module):
 
 
 class DownTransition(nn.Module):
-    def __init__(self, in_channel, depth, act, norm):
+    def __init__(self, in_channel, depth, act, norm, multi_scale=False):
         super(DownTransition, self).__init__()
-        self.ops = _make_nConv(in_channel, depth, act, norm)
+        self.multi_scale = multi_scale
+        if self.multi_scale:
+            out_channel = 8 ** (depth + 1)
+            num_groups = 4
+        else:
+            out_channel = 32 * (2 ** (depth + 1))
+            num_groups = 8
+        self.ops = _make_nConv(in_channel, out_channel, depth, act, norm, num_groups)
 
     def forward(self, x):
         return self.ops(x)
@@ -153,20 +171,28 @@ class PCRLv23d(nn.Module):
 
 
 class Cluster3d(nn.Module):
-    def __init__(self, n_clusters=10, act='relu', norm='bn', in_channels=1):
+    def __init__(self, n_clusters=10, act='relu', norm='bn', in_channels=1, multi_scale = False):
         super(Cluster3d, self).__init__()
 
-        self.patch_num = [8, 64, 512, 4096]  # Number of patches N for each scale
-        self.patch_dim = [(32,32,16),(16,16,8),(8,8,4),(4,4,2)]  # Patch dims P1 x P2 x P3 for each scale
+        self.multi_scale = multi_scale
+        if self.multi_scale: 
+            self.scales = [8, 64, 512, 4096]  # Feature scales
+            self.patch_num = self.scales  # Clustering scales (Number of patches N)
+            self.patch_dim = [(32,32,16),(16,16,8),(8,8,4),(4,4,2)]  # Patch dims P1 x P2 x P3 for each clustering scale
+        else:
+            self.scales = [64, 128, 256, 512]
+            self.patch_num = [512]  # Clustering only for last scale
+            self.patch_dim = [(8,8,4)]
+
         self.maxpool = nn.MaxPool3d(2)
-        self.down_tr = nn.ModuleList([DownTransition(scale, i, act, norm) for i, scale in enumerate([in_channels,] + self.patch_num[:-1])])  # Down transition for each scale
+        self.down_tr = nn.ModuleList([DownTransition(scale, i, act, norm, multi_scale=self.multi_scale) for i, scale in enumerate([in_channels,] + self.scales[:-1])])  # Down transition for each scale
         self.avg_pool = nn.AdaptiveAvgPool3d((1, 1, 1))
         self.sigmoid = nn.Sigmoid()
 
         # Clustering Pretask Head
         self.emb_dim = 64  # D
         self.proto_num = n_clusters  # K
-        self.cluster_projection_head = nn.ModuleList([nn.Linear(self.patch_dim[i][0]*self.patch_dim[i][1]*self.patch_dim[i][2], self.emb_dim) for i in range(0,4)])  # Projection head for each scale
+        self.cluster_projection_head = nn.ModuleList([nn.Linear(self.patch_dim[i][0]*self.patch_dim[i][1]*self.patch_dim[i][2], self.emb_dim) for i in range(len(self.patch_dim))])  # Projection head for each scale
         self.prototypes = nn.Linear(self.emb_dim, self.proto_num, bias=False)  # Prototypes 
 
     def forward(self, x, local=False):
@@ -175,10 +201,16 @@ class Cluster3d(nn.Module):
         out_down0 = self.maxpool(self.down_tr[0](x))
         out_down1  = self.maxpool(self.down_tr[1](out_down0))
         out_down2  = self.maxpool(self.down_tr[2](out_down1))
-        out_down3  = self.maxpool(self.down_tr[3](out_down2)) # Careful with the maxpool at this scale, because SegmentationModel doesn't have it normally
+        if self.multi_scale:
+            out_down3  = self.maxpool(self.down_tr[3](out_down2)) # Careful with the maxpool at this scale, because SegmentationModel doesn't have it normally
+        else:
+            out_down3 = self.down_tr[3](out_down2)
 
-        # Get feature maps at every scale
-        feat = [out_down0,out_down1,out_down2,out_down3]
+        # Get feature maps for every clustering scale
+        if self.multi_scale:
+            feat = [out_down0,out_down1,out_down2,out_down3]
+        else:
+            feat = [out_down3]
 
         # Flatten spatial dims P1,P2,P3 of feature maps (B x N x P1 x P2 x P3) at every scale
         flat_feat = [f.flatten(start_dim=2,end_dim=4) for f in feat]
@@ -186,7 +218,7 @@ class Cluster3d(nn.Module):
         # Get embeddings and output preds at every scale
         emb = []
         out = []
-        for i in range(0,4):
+        for i in range(len(flat_feat)):
             emb.append(self.cluster_projection_head[i](flat_feat[i]))
             out.append(self.prototypes(emb[i]))
 
@@ -207,14 +239,18 @@ class TraceWrapper(torch.nn.Module):
 class SegmentationModel(nn.Module):
     # the number of convolutions in each layer corresponds
     # to what is in the actual prototxt, not the intent
-    def __init__(self, n_class=1, act='relu', norm='bn', in_channels=1, low_dim=128, student=False, skip_conn=False):
+    def __init__(self, n_class=1, act='relu', norm='bn', in_channels=1, low_dim=128, student=False, skip_conn=False, multi_scale=False):
         super(SegmentationModel, self).__init__()
         
-        self.scales = [8, 64, 512, 4096]
+        self.multi_scale = multi_scale  #  For multi-scale clustering model
+        if self.multi_scale:
+            self.scales = [8, 64, 512, 4096]  # Feature Scales
+        else:
+            self.scales = [64, 128, 218, 512] 
         self.maxpool = nn.MaxPool3d(2)
-        self.down_tr = nn.ModuleList([DownTransition(scale, i, act, norm) for i, scale in enumerate([in_channels,] + self.scales[:-1])])
+        self.down_tr = nn.ModuleList([DownTransition(scale, i, act, norm, multi_scale=self.multi_scale) for i, scale in enumerate([in_channels,] + self.scales[:-1])])
         self.avg_pool = nn.AdaptiveAvgPool3d((1, 1, 1))
-        self.up_tr = nn.ModuleList([UpTransition(scale, scale, i, act, norm, skip_conn=skip_conn) for i, scale in reversed(list(enumerate(self.scales[1:])))])  # Ignore first scale because out_tr deals with it
+        self.up_tr = nn.ModuleList([UpTransition(scale, scale, i, act, norm, skip_conn=skip_conn, multi_scale=self.multi_scale) for i, scale in reversed(list(enumerate(self.scales[1:])))])  # Ignore first scale because out_tr deals with it
         self.out_tr = OutputTransition(self.scales[0], n_class)
         self.sigmoid = nn.Sigmoid()
         self.skip_conn = skip_conn

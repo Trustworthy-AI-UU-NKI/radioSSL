@@ -55,7 +55,7 @@ def cos_loss(cosine, output1, output2):
 
 def train_3d(args, data_loader, run_dir, out_channel=3, writer=None):
 
-    if args.model == 'cluster':
+    if 'cluster' in args.model:
         # Generate colors for cluster masks
         palette = sns.color_palette(palette='bright', n_colors=args.k)
         colors = torch.Tensor([list(color) for color in palette]).cpu()  # cpu because we apply it on a detached tensor later
@@ -68,8 +68,9 @@ def train_3d(args, data_loader, run_dir, out_channel=3, writer=None):
     # Create model and optimizer
     if args.model == 'pcrlv2':
         model = PCRLv23d(skip_conn=args.skip_conn)
-    elif args.model == 'cluster':
-        model = Cluster3d(n_clusters=args.k)
+    elif 'cluster' in args.model:
+        multi_scale = True if 'ms' in args.model else False
+        model = Cluster3d(n_clusters=args.k, multi_scale=multi_scale)
     if not args.cpu:
         model = model.cuda()
 
@@ -101,7 +102,7 @@ def train_3d(args, data_loader, run_dir, out_channel=3, writer=None):
 
         if args.model == 'pcrlv2':
             loss, prob, total_loss, writer = train_pcrlv2_inner(args, epoch, train_loader, model, optimizer, criterion, cosine, writer)
-        elif args.model == 'cluster':
+        elif 'cluster' in args.model:
             loss, prob, total_loss, writer = train_cluster_inner(args, epoch, train_loader, model, optimizer, criterion, cosine, writer, colors)
 
         time2 = time.time()
@@ -115,7 +116,7 @@ def train_3d(args, data_loader, run_dir, out_channel=3, writer=None):
 
         n_epochs = min(10,args.epochs+1) # The number of epochs to sample for the grid (10 or all epochs if total less than 10) (+1 because we always run for one extra epoch)
         
-        if args.vis and ((epoch % ((args.epochs + 1) // (n_epochs - 2))) == 0 or epoch==args.epochs) and args.model == 'cluster' and args.n == 'brats': 
+        if args.vis and ((epoch % ((args.epochs + 1) // (n_epochs - 2))) == 0 or epoch==args.epochs) and 'cluster' in args.model and args.n == 'brats': 
             # TODO: Currently only works for BraTS Clustering
             # The n_epochs - 2 is because we want to sample one less so that we can always add the final epoch in the end regardless of the step, and one less because epoch 0 is always included
 

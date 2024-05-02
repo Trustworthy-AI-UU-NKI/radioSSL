@@ -236,8 +236,6 @@ def train_pcrlv2_inner(args, epoch, train_loader, model, optimizer, criterion, c
                 scaled_loss.backward()
         else:
             loss.backward()
-        # clip_value = 10
-        # torch.nn.utils.clip_grad_norm_(model.parameters(), clip_value)
         optimizer.step()
 
         # Meters

@@ -3,7 +3,7 @@ import os
 import warnings
 
 import torch.backends.cudnn
-from train_2d import train_pcrlv2
+from train_2d import train_pcrlv2_2d, train_cluster_2d
 from train_3d import train_pcrlv2_3d, train_cluster_3d
 from data import DataGenerator, get_dataloader
 from utils import set_seed, create_logger
@@ -77,7 +77,11 @@ if __name__ == '__main__':
         
     # 2D PCRLv2 Pretask
     if args.model == 'pcrlv2' and args.phase == 'pretask' and args.d == 2:
-        train_pcrlv2(args, data_loader, run_dir, writer=writer)
+        train_pcrlv2_2d(args, data_loader, run_dir, writer=writer)
+
+    # 2D Cluster Pretask
+    if 'cluster' in args.model and args.phase == 'pretask' and args.d == 2:
+        train_cluster_2d(args, data_loader, run_dir, writer=writer)
     
     # 3D PCRLv2 Pretask
     elif args.model == 'pcrlv2' and args.phase == 'pretask' and args.d == 3:

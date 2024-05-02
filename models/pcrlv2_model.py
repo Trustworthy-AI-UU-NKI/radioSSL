@@ -1,9 +1,10 @@
 import segmentation_models_pytorch as smp
+import torch
 import torch.nn as nn
 import torch.nn.functional as F
 from segmentation_models_pytorch.base import modules as md
-
 from segmentation_models_pytorch.base.initialization import initialize_decoder, initialize_head
+from torch_kmeans import KMeans
 
 
 
@@ -212,4 +213,18 @@ class PCRLv2(nn.Module):
         else:
             return decoder_outputs, masks, middle_masks
 
+
+class Cluster(nn.Module):
+    def __init__(self, in_channels=1, n_clusters=50, low_dim=128, encoder_weights=None, seed=1):
+        super(Cluster, self).__init__()
+        self.model = smp.Unet('resnet18', in_channels=in_channels, classes=n_clusters, encoder_weights=encoder_weights)
+        self.model.decoder = PCRLv2Decoder(self.model.encoder.out_channels)
+        self.featup_upsampler = torch.hub.load("mhamilton723/FeatUp", 'dino16', use_norm=False)
+        self.kmeans = KMeans(n_clusters=n_clusters, seed=seed)
+
+    def forward(self, x):
+        features = self.model.encoder(x)
+        _, decoder_out, _ = self.model.decoder(features)
+        out = self.model.segmentation_head(decoder_out)
+        return out
 

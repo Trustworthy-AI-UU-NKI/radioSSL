@@ -43,7 +43,7 @@ class LitsPretask(Dataset):
         
         crop1_coords = []
         crop2_coords = []
-        if 'cluster' in config.model:
+        if 'cluster' in self.config.model:
             crop1_coords = np.array(eval(self.coords.loc[relative_image_path]['crop1']))
             crop2_coords = np.array(eval(self.coords.loc[relative_image_path]['crop2']))
 
@@ -98,10 +98,13 @@ class LitsFineTune(Dataset):
         # resize
         ct_array = ct_array.unsqueeze(1)  # Add temporary channel dimension (D x H x W -> (D x 1 x H x W)
         seg_array = seg_array.unsqueeze(1)
-        ct_array = f.interpolate(ct_array, scale_factor=(0.5,0.5))  # Scale only height and weight, not slice dim
-        seg_array = f.interpolate(seg_array, scale_factor=(0.5,0.5))
+        ct_array = f.interpolate(ct_array, scale_factor=(0.75,0.75))  # Scale only height and weight, not slice dim
+        seg_array = f.interpolate(seg_array, scale_factor=(0.75,0.75))
         ct_array = ct_array.squeeze(1)
         seg_array = seg_array.squeeze(1)
+
+        # Keep only lung class (class 1)
+        seg_array[seg_array==2] = 1
 
         # random crop slices
         if self.train:

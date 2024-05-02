@@ -61,6 +61,10 @@ def train_segmentation(args, dataloader, in_channels, n_classes, run_dir, writer
             image = image.float()
             gt = gt.float()
 
+            # Input dimensions
+            B, M, H, W, D = image.shape
+            _, C, _, _, _ = gt.shape 
+
             # if args.tensorboard and epoch == 0:  # Only on the first iteration, write model graph on tensorboard
             #     if args.d == 2:
             #         writer.add_graph(model, image.permute(0,3,1,2,4).flatten(0,1))
@@ -68,9 +72,6 @@ def train_segmentation(args, dataloader, in_channels, n_classes, run_dir, writer
             #         writer.add_graph(model, image)
 
             if args.d == 2: # If model is 2D unet, then combine batch and slice dimension and scale input to power of 2
-                # Input dimensions
-                B, M, H, W, D = image.shape
-                _, C, _, _, _ = gt.shape 
                 # Combine batch and slice dim
                 image = image.permute(0,4,1,2,3).reshape(B*D,M,H,W)  # B x M x H x W x D -> B*D x M x H x W
                 gt = gt.permute(0,4,1,2,3).reshape(B*D,C,H,W)

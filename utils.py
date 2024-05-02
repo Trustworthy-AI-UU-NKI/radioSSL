@@ -105,7 +105,6 @@ def get_model(args, in_channels, n_class):
             assert args.pretrained != 'none'
             assert args.weight
         if args.d == 3:
-            multi_scale
             model = SegmentationModel(in_channels=in_channels, n_class=n_class, norm='gn', skip_conn=args.skip_conn)
         elif args.d == 2:
             model = PCRLv2(in_channels=in_channels, n_class=n_class)

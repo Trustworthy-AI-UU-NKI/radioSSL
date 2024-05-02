@@ -52,7 +52,7 @@ class UpTransition(nn.Module):
         self.depth = depth
         self.up_conv = nn.ConvTranspose3d(inChans, outChans, kernel_size=2, stride=2)
         
-        if self_multi_scale:
+        if self.multi_scale:
             p = 8  # Scale step (power)
             channels = 8 ** (depth + 1)
             num_groups = 4

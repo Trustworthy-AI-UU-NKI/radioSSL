@@ -11,6 +11,7 @@ import time
 import math
 import random
 import PIL
+import numpy as np
 
 import torch
 import torch.backends.cudnn as cudnn
@@ -73,6 +74,7 @@ def train_3d(args, data_loader, run_dir, out_channel=3, writer=None):
         model = Cluster3d(n_clusters=args.k, multi_scale=multi_scale)
     if not args.cpu:
         model = model.cuda()
+
 
     optimizer = torch.optim.SGD(model.parameters(),
                                 lr=args.lr,
@@ -306,143 +308,145 @@ def train_cluster_inner(args, epoch, train_loader, model, optimizer, criterion, 
         emb2_all, pred2_all = model(x2)
         
         ## SwAV Loss
-        loss1 = []
         n_scales = len(emb1_all)
-        for sc in range(n_scales):  # For each scale
-            emb1 = emb1_all[sc]
-            emb2 = emb2_all[sc]
-            pred1 = pred1_all[sc]
-            pred2 = pred2_all[sc]
+        if n_scales > 1:
+            sc = random.randint(0,n_scales-1)
+        else:
+            sc = 0
+    
+        emb1 = emb1_all[sc]
+        emb2 = emb2_all[sc]
+        pred1 = pred1_all[sc]
+        pred2 = pred2_all[sc]
 
-            # Normalize D dimension (BxNxD)
-            emb1 = nn.functional.normalize(emb1, dim=2, p=2)  
-            emb2 = nn.functional.normalize(emb2, dim=2, p=2) 
 
-            # Get ground truths (teacher predictions)
-            with torch.no_grad():
-                # Get prototypes and normalize
-                proto = model.module.prototypes.weight.data.clone()
-                proto = nn.functional.normalize(proto, dim=1, p=2)  # Normalize D dimension (KxD)
+        # Normalize D dimension (BxNxD)
+        emb1 = nn.functional.normalize(emb1, dim=2, p=2)  
+        emb2 = nn.functional.normalize(emb2, dim=2, p=2) 
 
-                # Embedding to prototype similarity matrix
-                cos_sim1 = torch.matmul(emb1, proto.t())  # BxNxK
-                cos_sim2 = torch.matmul(emb2, proto.t())
+        # Get ground truths (teacher predictions)
+        with torch.no_grad():
+            # Get prototypes and normalize
+            proto = model.module.prototypes.weight.data.clone()
+            proto = nn.functional.normalize(proto, dim=1, p=2)  # Normalize D dimension (KxD)
 
-                N = model.module.patch_num[sc]
-                PH, PW, PD = model.module.patch_dim[sc]
-                K = model.module.proto_num
+            # Embedding to prototype similarity matrix
+            cos_sim1 = torch.matmul(emb1, proto.t())  # BxNxK
+            cos_sim2 = torch.matmul(emb2, proto.t())
 
-                # Flatten batch and patch num dimensions of similarity matrices (BxNxK -> B*NxK), and transpose matrices (KxB*N) for sinkhorn algorithm
-                flat_cos_sim1 = cos_sim1.reshape(B*N,K).T
-                flat_cos_sim2 = cos_sim2.reshape(B*N,K).T
+            N = model.module.patch_num[sc]
+            PH, PW, PD = model.module.patch_dim[sc]
+            K = model.module.proto_num
 
-                # Standardize for numerical stability (maybe?)
-                eps = 0.05
-                flat_cos_sim1 = torch.exp(flat_cos_sim1 / eps)
-                flat_cos_sim2 = torch.exp(flat_cos_sim2 / eps)
+            # Flatten batch and patch num dimensions of similarity matrices (BxNxK -> B*NxK), and transpose matrices (KxB*N) for sinkhorn algorithm
+            flat_cos_sim1 = cos_sim1.reshape(B*N,K).T
+            flat_cos_sim2 = cos_sim2.reshape(B*N,K).T
 
-                # Teacher cluster assignments
-                gt1 = sinkhorn(args, Q=flat_cos_sim1, nmb_iters=3).T.reshape((B,N,K))  # Also restore patch num dimension
-                gt2 = sinkhorn(args, Q=flat_cos_sim2, nmb_iters=3).T.reshape((B,N,K))
+            # Standardize for numerical stability (maybe?)
+            eps = 0.05
+            flat_cos_sim1 = torch.exp(flat_cos_sim1 / eps)
+            flat_cos_sim2 = torch.exp(flat_cos_sim2 / eps)
 
-                # Apply temperature
-                temp = 1
-                gt1 = gt1 / temp
-                gt2 = gt2 / temp
+            # Teacher cluster assignments
+            gt1 = sinkhorn(args, Q=flat_cos_sim1, nmb_iters=3).T.reshape((B,N,K))  # Also restore patch num dimension
+            gt2 = sinkhorn(args, Q=flat_cos_sim2, nmb_iters=3).T.reshape((B,N,K))
 
-            # Convert to probabilities
-            pred1 = pred1.softmax(2)
-            pred2 = pred2.softmax(2)
+            # Apply temperature
+            temp = 1
+            gt1 = gt1 / temp
+            gt2 = gt2 / temp
 
-            # Convert prediction and ground truth to (soft) cluster masks (restore spatial position of pooled image)
-            NPH = H//PH  # Num patches at X
-            NPW = W//PW  # Num patches at Y
-            NPD = D//PD  # Num patches at Z
-            pred1 = pred1.permute(0,2,1).reshape((B,K,NPH,NPW,NPD))
-            pred2 = pred2.permute(0,2,1).reshape((B,K,NPH,NPW,NPD))
-            gt1 = gt1.permute(0,2,1).reshape((B,K,NPH,NPW,NPD))
-            gt2 = gt2.permute(0,2,1).reshape((B,K,NPH,NPW,NPD))
+        # Convert to probabilities
+        pred1 = pred1.softmax(2)
+        pred2 = pred2.softmax(2)
 
-            # ROI-align crop intersection with cluster assignment intersection
-            pred1, pred2, gt1, gt2 = roi_align_intersect(pred1, pred2, gt1, gt2, crop1_coords, crop2_coords)
+        # Convert prediction and ground truth to (soft) cluster masks (restore spatial position of pooled image)
+        NPH = H//PH  # Num patches at X
+        NPW = W//PW  # Num patches at Y
+        NPD = D//PD  # Num patches at Z
+        pred1 = pred1.permute(0,2,1).reshape((B,K,NPH,NPW,NPD))
+        pred2 = pred2.permute(0,2,1).reshape((B,K,NPH,NPW,NPD))
+        gt1 = gt1.permute(0,2,1).reshape((B,K,NPH,NPW,NPD))
+        gt2 = gt2.permute(0,2,1).reshape((B,K,NPH,NPW,NPD))
 
-            # SwAV Loss for current scale
-            scale_swav_loss = swav_loss(gt1, gt2, pred1, pred2)
+        # ROI-align crop intersection with cluster assignment intersection
+        pred1, pred2, gt1, gt2 = roi_align_intersect(pred1, pred2, gt1, gt2, crop1_coords, crop2_coords)
 
-            loss1.append(scale_swav_loss)
+        # SwAV Loss for current scale
+        scale_swav_loss = swav_loss(gt1, gt2, pred1, pred2)
 
-            # Plot predictions on tensorboard
-            with torch.no_grad():
-                b_idx = 0
-                if args.vis and idx==b_idx and epoch % 10 == 0:
+        # Plot predictions on tensorboard
+        with torch.no_grad():
+            b_idx = 0
+            if args.vis and idx==b_idx: #and epoch % 10 == 0:
 
-                    # Select 2D images
-                    img_idx = 0
-                    m_idx = 0
-                    c_idx = 0
-                    in1 = x1[img_idx,m_idx,:,:,input1.size(-1)//2].unsqueeze(0)
-                    in2 = x2[img_idx,m_idx,:,:,input2.size(-1)//2].unsqueeze(0)
-                    pred1 = pred1[img_idx,:,:,:,pred1.size(-1)//2].argmax(dim=0).unsqueeze(0)  # Take only hard cluster assignment (argmax)
-                    pred2 = pred2[img_idx,:,:,:,pred2.size(-1)//2].argmax(dim=0).unsqueeze(0)
-                    gt1 = gt1[img_idx,:,:,:,gt1.size(-1)//2].argmax(dim=0).unsqueeze(0)
-                    gt2 = gt2[img_idx,:,:,:,gt2.size(-1)//2].argmax(dim=0).unsqueeze(0)
+                # Select 2D images
+                img_idx = 0
+                m_idx = 0
+                c_idx = 0
+                in1 = x1[img_idx,m_idx,:,:,input1.size(-1)//2].unsqueeze(0)
+                in2 = x2[img_idx,m_idx,:,:,input2.size(-1)//2].unsqueeze(0)
+                pred1 = pred1[img_idx,:,:,:,pred1.size(-1)//2].argmax(dim=0).unsqueeze(0)  # Take only hard cluster assignment (argmax)
+                pred2 = pred2[img_idx,:,:,:,pred2.size(-1)//2].argmax(dim=0).unsqueeze(0)
+                gt1 = gt1[img_idx,:,:,:,gt1.size(-1)//2].argmax(dim=0).unsqueeze(0)
+                gt2 = gt2[img_idx,:,:,:,gt2.size(-1)//2].argmax(dim=0).unsqueeze(0)
 
-                    # Min-max norm input images
-                    in1 = (in1 - in1.min())/(in1.max() - in1.min())
-                    in2 = (in2 - in2.min())/(in2.max() - in2.min())
+                # Min-max norm input images
+                in1 = (in1 - in1.min())/(in1.max() - in1.min())
+                in2 = (in2 - in2.min())/(in2.max() - in2.min())
 
-                    # Interpolate cluster masks to original input shape
-                    pred1 = f.interpolate(pred1.float().unsqueeze(0), size=(H,W)).squeeze(0)
-                    pred2 = f.interpolate(pred2.float().unsqueeze(0), size=(H,W)).squeeze(0)
-                    gt1 = f.interpolate(gt1.float().unsqueeze(0), size=(H,W)).squeeze(0)
-                    gt2 = f.interpolate(gt2.float().unsqueeze(0), size=(H,W)).squeeze(0)
+                # Interpolate cluster masks to original input shape
+                pred1 = f.interpolate(pred1.float().unsqueeze(0), size=(H,W)).squeeze(0)
+                pred2 = f.interpolate(pred2.float().unsqueeze(0), size=(H,W)).squeeze(0)
+                gt1 = f.interpolate(gt1.float().unsqueeze(0), size=(H,W)).squeeze(0)
+                gt2 = f.interpolate(gt2.float().unsqueeze(0), size=(H,W)).squeeze(0)
 
-                    # Send to cpu
-                    in1 = in1.cpu().detach()
-                    in2 = in2.cpu().detach()
-                    pred1 = pred1.cpu().detach()
-                    pred2 = pred2.cpu().detach()
-                    gt1 = gt1.cpu().detach()
-                    gt2 = gt2.cpu().detach()
+                # Send to cpu
+                in1 = in1.cpu().detach()
+                in2 = in2.cpu().detach()
+                pred1 = pred1.cpu().detach()
+                pred2 = pred2.cpu().detach()
+                gt1 = gt1.cpu().detach()
+                gt2 = gt2.cpu().detach()
 
-                    # Give color to each cluster in cluster masks
-                    pred1 = pred1.repeat((3,1,1)).permute(1,2,0)  # Convert to RGB and move channel dim to the end
-                    pred2 = pred2.repeat((3,1,1)).permute(1,2,0)
-                    gt1 = gt1.repeat((3,1,1)).permute(1,2,0)
-                    gt2 = gt2.repeat((3,1,1)).permute(1,2,0)
-                    for c in range(colors.shape[0]):
-                        pred1[pred1[:,:,0] == c] = colors[c]
-                        pred2[pred2[:,:,0] == c] = colors[c]
-                        gt1[gt1[:,:,0] == c] = colors[c]
-                        gt2[gt2[:,:,0] == c] = colors[c]
-                    pred1 = pred1.permute(2,1,0)
-                    pred2 = pred2.permute(2,1,0)
-                    gt1 = gt1.permute(2,1,0)
-                    gt2 = gt2.permute(2,1,0)
+                # Give color to each cluster in cluster masks
+                pred1 = pred1.repeat((3,1,1)).permute(1,2,0)  # Convert to RGB and move channel dim to the end
+                pred2 = pred2.repeat((3,1,1)).permute(1,2,0)
+                gt1 = gt1.repeat((3,1,1)).permute(1,2,0)
+                gt2 = gt2.repeat((3,1,1)).permute(1,2,0)
+                for c in range(colors.shape[0]):
+                    pred1[pred1[:,:,0] == c] = colors[c]
+                    pred2[pred2[:,:,0] == c] = colors[c]
+                    gt1[gt1[:,:,0] == c] = colors[c]
+                    gt2[gt2[:,:,0] == c] = colors[c]
+                pred1 = pred1.permute(2,1,0)
+                pred2 = pred2.permute(2,1,0)
+                gt1 = gt1.permute(2,1,0)
+                gt2 = gt2.permute(2,1,0)
 
-                    # Pad images for better visualization                
-                    in1 = f.pad(in1.unsqueeze(0),(2,1,2,2),value=1)
-                    in2 = f.pad(in2.unsqueeze(0),(1,2,2,2),value=1)
-                    pred1 = f.pad(pred1.unsqueeze(0),(2,1,2,2),value=1)
-                    pred2 = f.pad(pred2.unsqueeze(0),(1,2,2,2),value=1)
-                    gt1 = f.pad(gt1.unsqueeze(0),(2,1,2,2),value=1)
-                    gt2 = f.pad(gt2.unsqueeze(0),(1,2,2,2),value=1)
+                # Pad images for better visualization                
+                in1 = f.pad(in1.unsqueeze(0),(2,1,2,2),value=1)
+                in2 = f.pad(in2.unsqueeze(0),(1,2,2,2),value=1)
+                pred1 = f.pad(pred1.unsqueeze(0),(2,1,2,2),value=1)
+                pred2 = f.pad(pred2.unsqueeze(0),(1,2,2,2),value=1)
+                gt1 = f.pad(gt1.unsqueeze(0),(2,1,2,2),value=1)
+                gt2 = f.pad(gt2.unsqueeze(0),(1,2,2,2),value=1)
 
-                    # Combine crops and save in tensorboard
-                    in_img = torch.cat((in1,in2),dim=3).squeeze(0).cpu().detach().numpy()
-                    pred_img = torch.cat((pred1,pred2),dim=3).squeeze(0).cpu().detach().numpy()
-                    gt_img = torch.cat((gt1,gt2),dim=3).squeeze(0).cpu().detach().numpy()
+                # Combine crops and save in tensorboard
+                in_img = torch.cat((in1,in2),dim=3).squeeze(0).cpu().detach().numpy()
+                pred_img = torch.cat((pred1,pred2),dim=3).squeeze(0).cpu().detach().numpy()
+                gt_img = torch.cat((gt1,gt2),dim=3).squeeze(0).cpu().detach().numpy()
 
-                    in_img_name = 'img/train/raw' 
-                    pred_img_name = f'img/train/pred_{sc}'
-                    gt_img_name = f'img/train/gt_{sc}'
+                in_img_name = 'img/train/raw' 
+                pred_img_name = f'img/train/pred_{sc}'
+                gt_img_name = f'img/train/gt_{sc}'
 
-                    writer.add_image(in_img_name, img_tensor=in_img, global_step=epoch, dataformats='CHW')
-                    writer.add_image(pred_img_name, img_tensor=pred_img, global_step=epoch, dataformats='CHW')   
-                    writer.add_image(gt_img_name, img_tensor=gt_img, global_step=epoch, dataformats='CHW')
+                writer.add_image(in_img_name, img_tensor=in_img, global_step=epoch, dataformats='CHW')
+                writer.add_image(pred_img_name, img_tensor=pred_img, global_step=epoch, dataformats='CHW')   
+                writer.add_image(gt_img_name, img_tensor=gt_img, global_step=epoch, dataformats='CHW')
 
         # TODO: add the other losses later
-        loss1 = sum(loss1)/len(loss1)
+        loss1 = scale_swav_loss
         loss2 = torch.tensor(0)
         loss4 = 0
         local_loss = 0

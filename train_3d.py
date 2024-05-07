@@ -24,7 +24,7 @@ import seaborn as sns
 from matplotlib import pyplot as plt
 
 from models import PCRLv23d, Cluster3d, TraceWrapper
-from utils import adjust_learning_rate, AverageMeter, sinkhorn, swav_loss, roi_align_intersect
+from tools import adjust_learning_rate, AverageMeter, sinkhorn, swav_loss, roi_align_intersect
 
 
 try:
@@ -284,7 +284,7 @@ def train_cluster_inner(args, epoch, train_loader, model, optimizer, criterion, 
     total_loss_meter = AverageMeter()
 
     end = time.time()
-    for idx, (input1, input2, gt1, gt2, crop1_coords, crop2_coords, local_views) in enumerate(train_loader):
+    for idx, (input1, input2, _, _, crop1_coords, crop2_coords, _) in enumerate(train_loader):
 
         B, C, H, W, D = input1.shape
 
@@ -296,8 +296,6 @@ def train_cluster_inner(args, epoch, train_loader, model, optimizer, criterion, 
         if not args.cpu:
             x1 = x1.cuda()
             x2 = x2.cuda()
-            gt1 = gt1.cuda()
-            gt2 = gt2.cuda()
             crop1_coords = crop1_coords.cuda()
             crop2_coords = crop2_coords.cuda()
 

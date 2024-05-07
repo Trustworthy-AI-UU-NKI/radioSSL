@@ -8,7 +8,7 @@ import torch.nn.functional as f
 import random
 from copy import deepcopy
 
-from utils import prepare_model, get_loss, dice_coeff
+from tools import prepare_model, get_loss, dice_coeff
 from torch.utils.tensorboard import SummaryWriter
 
 from matplotlib import pyplot as plt

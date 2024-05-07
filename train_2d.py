@@ -10,7 +10,7 @@ import torch.backends.cudnn as cudnn
 import torch.nn as nn
 import torch.nn.functional as f
 import random
-from utils import adjust_learning_rate, AverageMeter
+from tools import adjust_learning_rate, AverageMeter
 from models import PCRLv2, Cluster
 from torch_kmeans import KMeans
 
@@ -106,9 +106,9 @@ def train_2d(args, data_loader, run_dir, out_channel=3, writer=None):
         time1 = time.time()
 
         if args.model == 'pcrlv2':
-            loss, prob, total_loss = train_pcrlv2_inner(args, epoch, train_loader, model, optimizer, criterion, cosine)
+            loss, prob, total_loss = train_pcrlv2_inner(args, epoch, train_loader, model, optimizer, criterion, cosine, writer)
         elif 'cluster' in args.model:
-            loss, prob, total_loss = train_cluster_inner(args, epoch, train_loader, model, optimizer, criterion, cosine)
+            loss, prob, total_loss = train_cluster_inner(args, epoch, train_loader, model, optimizer, criterion, cosine, writer)
 
         time2 = time.time()
         print('epoch {}, total time {:.2f}'.format(epoch, time2 - time1))
@@ -132,7 +132,7 @@ def train_2d(args, data_loader, run_dir, out_channel=3, writer=None):
         torch.cuda.empty_cache()
 
 
-def train_pcrlv2_inner(args, epoch, train_loader, model, optimizer, criterion, cosine):
+def train_pcrlv2_inner(args, epoch, train_loader, model, optimizer, criterion, cosine, writer):
     """
     one epoch training for instance discrimination
     """
@@ -240,7 +240,7 @@ def train_pcrlv2_2d(args, data_loader, run_dir, out_channel=3, writer=None):
     train_2d(args, data_loader, run_dir, out_channel=out_channel, writer=writer)
 
 
-def train_cluster_inner(args, epoch, train_loader, model, optimizer, criterion, cosine):
+def train_cluster_inner(args, epoch, train_loader, model, optimizer, criterion, cosine, writer):
     """
     one epoch training for instance discrimination
     """
@@ -254,43 +254,56 @@ def train_cluster_inner(args, epoch, train_loader, model, optimizer, criterion, 
     total_loss_meter = AverageMeter()
 
     end = time.time()
-    for idx, (input1, input2, gt1, gt2, _, _, _) in enumerate(train_loader):
+    for idx, (input1, input2, _, _, crop1_coords, crop2_coords, _) in enumerate(train_loader):
         data_time.update(time.time() - end)
 
         x1 = input1.float()
         x2 = input2.float()
-        gt1 = gt1.float()
 
         if not args.cpu:
             x1 = x1.cuda()
-            x2 = x2.float()
-            gt1 = gt1.cuda()
+            x2 = x2.cuda()
+            crop1_coords = crop1_coords.cuda()
+            crop2_coords = crop2_coords.cuda()
 
         # Convert 3D input to 2D
         B, M, H, W, D = x1.shape
-        _, C, _, _, _ = gt1.shape 
         x1 = x1.permute(0,4,1,2,3).reshape(B*D,M,H,W)  # B x M x H x W x D -> B*D x M x H x W
         x2 = x2.permute(0,4,1,2,3).reshape(B*D,M,H,W)
-        gt1 = gt1.permute(0,4,1,2,3).reshape(B*D,M,H,W)
-        gt2 = gt2.permute(0,4,1,2,3).reshape(B*D,M,H,W)
 
         # Get cluster predictions from student U-Net
-        pred1 = model.encoder(x1)
-        pred2 = model.encoder(x2)
+        print(x1.device,x2.device)
+        pred1 = model.module(x1)
+        pred2 = model.module(x2)
 
         # Get upsampled features from teacher DINO ViT16 encoder
         with torch.no_grad():
-            feat1 = model.featup_upsampler.model(x1)
-            feat2 = model.featup_upsampler.model(x2)
+            feat1 = model.module.featup_upsampler(x1.repeat(1,3,1,1))  # Requires 3 channels
+            feat2 = model.module.featup_upsampler(x2.repeat(1,3,1,1))
         
         # Flatten spatial dimensions to get feature vectors for each pixel
         feat_vec1 = feat1.permute(0,2,3,1).flatten(0,2)  # B*D x C' x H' x W' -> B*D*H'*W' x C'
         feat_vec2 = feat2.permute(0,2,3,1).flatten(0,2)  # B*D x C' x H' x W' -> B*D*H'*W' x C'
 
-        # Perform K-Means on teacher feature vectors
-        KMeans.fit_predict(feat_vec2)
+        # Log images on tensorboard
+        if args.tensorboard and args.vis:
+            in_img = x1[0].cpu().detach().numpy()
+            pred_img = pred1[0].cpu().detach().numpy()
+            dino_img = feat1[0].cpu().detach().numpy()
 
-            
+            in_img_name = 'img/train/raw' 
+            pred_img_name = f'img/train/pred'
+            dino_img_name = f'img/train/dino'
+
+            writer.add_image(in_img_name, img_tensor=in_img, global_step=epoch, dataformats='CHW')
+            writer.add_image(pred_img_name, img_tensor=pred_img, global_step=epoch, dataformats='CHW')   
+            writer.add_image(dino_img_name, img_tensor=dino_img, global_step=epoch, dataformats='CHW')
+
+        # Perform K-Means on teacher feature vectors
+        model.kmeans.fit_predict(x=feat_vec2)
+        print()
+
+        
 
 
         # TODO: add the other losses later

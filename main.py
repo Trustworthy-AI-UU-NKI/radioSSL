@@ -6,7 +6,7 @@ import torch.backends.cudnn
 from train_2d import train_pcrlv2_2d, train_cluster_2d
 from train_3d import train_pcrlv2_3d, train_cluster_3d
 from data import DataGenerator, get_dataloader
-from utils import set_seed, create_logger
+from tools import set_seed, create_logger
 from finetune import train_lidc_segmentation, test_lidc_segmentation, train_brats_segmentation, test_brats_segmentation, train_lits_segmentation, test_lits_segmentation
 
 

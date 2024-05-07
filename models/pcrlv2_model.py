@@ -4,7 +4,8 @@ import torch.nn as nn
 import torch.nn.functional as F
 from segmentation_models_pytorch.base import modules as md
 from segmentation_models_pytorch.base.initialization import initialize_decoder, initialize_head
-from torch_kmeans import KMeans
+# from torch_kmeans import KMeans
+from sklearn.cluster import KMeans
 
 
 
@@ -231,7 +232,8 @@ class Cluster(nn.Module):
             for k, v in upsampler_dict.items():
                 model_dict[k] = v
             self.featup_upsampler.load_state_dict(model_dict)
-        self.kmeans = KMeans(n_clusters=n_clusters, seed=seed)
+        # self.kmeans = KMeans(n_clusters=n_clusters, seed=seed)
+        self.kmeans = KMeans(n_clusters=n_clusters, random_state=seed)
 
     def forward(self, x):
         features = self.model.encoder(x)

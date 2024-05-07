@@ -18,7 +18,6 @@ import torch.backends.cudnn as cudnn
 import torch.nn as nn
 import torch.nn.functional as f
 import torchvision.transforms.functional as t
-from torch.utils.tensorboard import SummaryWriter
 
 import seaborn as sns
 from matplotlib import pyplot as plt
@@ -380,12 +379,13 @@ def train_cluster_inner(args, epoch, train_loader, model, optimizer, criterion, 
                 img_idx = 0
                 m_idx = 0
                 c_idx = 0
-                in1 = x1[img_idx,m_idx,:,:,input1.size(-1)//2].unsqueeze(0)
-                in2 = x2[img_idx,m_idx,:,:,input2.size(-1)//2].unsqueeze(0)
-                pred1 = pred1[img_idx,:,:,:,pred1.size(-1)//2].argmax(dim=0).unsqueeze(0)  # Take only hard cluster assignment (argmax)
-                pred2 = pred2[img_idx,:,:,:,pred2.size(-1)//2].argmax(dim=0).unsqueeze(0)
-                gt1 = gt1[img_idx,:,:,:,gt1.size(-1)//2].argmax(dim=0).unsqueeze(0)
-                gt2 = gt2[img_idx,:,:,:,gt2.size(-1)//2].argmax(dim=0).unsqueeze(0)
+                s_idx = D//2
+                in1 = x1[img_idx,m_idx,:,:,s_idx].unsqueeze(0)
+                in2 = x2[img_idx,m_idx,:,:,s_idx].unsqueeze(0)
+                pred1 = pred1[img_idx,:,:,:,s_idx].argmax(dim=0).unsqueeze(0)  # Take only hard cluster assignment (argmax)
+                pred2 = pred2[img_idx,:,:,:,s_idx].argmax(dim=0).unsqueeze(0)
+                gt1 = gt1[img_idx,:,:,:,s_idx].argmax(dim=0).unsqueeze(0)
+                gt2 = gt2[img_idx,:,:,:,s_idx].argmax(dim=0).unsqueeze(0)
 
                 # Min-max norm input images
                 in1 = (in1 - in1.min())/(in1.max() - in1.min())

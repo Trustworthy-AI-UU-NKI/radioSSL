@@ -609,9 +609,9 @@ def sinkhorn(args, Q: torch.Tensor, nmb_iters: int) -> torch.Tensor:
 
 def roi_align_intersect(pred1, pred2, gt1, gt2, box1, box2):
     # Cluster assignments to align for crop 1 and crop 2: pred1, pred2, gt1, gt2
-    # Dimensions (H,W,Z) of input crop: crop_shape
+    # Dimensions (H,W) or (H,W,Z) of input crop: crop_shape
     # Coordinates of the crop bounding box : box1, box2
-    # ATTENTION AT THE ORDER OF DIMS: box is [x1,x2,y1,y2,z1,z2], ibox is [y1,x1,y2.x2]
+    # ATTENTION AT THE ORDER OF DIMS: box is [x1,x2,y1,y2] or [x1,x2,y1,y2,z1,z2], ibox is [y1,x1,y2.x2]
 
     # Crop dimensions
     H1 = box1[:,1] - box1[:,0]
@@ -619,8 +619,14 @@ def roi_align_intersect(pred1, pred2, gt1, gt2, box1, box2):
     H2 = box2[:,1] - box2[:,0]
     W2 = box2[:,3] - box2[:,2]
 
-    # Pooled crop dimensions: (num patches in height) x (num patches in width) x (num patches in depth)
-    B, K, NPH, NPW, NPD = pred1.shape
+    # Pooled dimensions
+    B, K, NPH, NPW = pred1.shape[:4]
+
+    # Convert to float
+    pred1 = pred1.float()
+    pred2 = pred2.float()
+    gt1 = gt1.float()
+    gt2 = gt2.float()
 
     # Calculate interesection box of the two crop bounding boxes
     x1 = torch.maximum(box1[:,0], box2[:,0])
@@ -640,28 +646,46 @@ def roi_align_intersect(pred1, pred2, gt1, gt2, box1, box2):
         ibox1[:,i] = ibox1[:,i]*NP
         ibox2[:,i] = ibox2[:,i]*NP
 
-    # Repeat the same alignment for every slice
-    align1 = ibox1.unsqueeze(1).repeat(1,NPD,1)
-    align2 = ibox2.unsqueeze(1).repeat(1,NPD,1)
+    if len(pred1.shape) == 5:  # 3D input
 
-    # Preprocess alignments for roi_align
-    align1 = align1.reshape(B*NPD,4) # Flatten batch and slice dimension
-    align2 = align2.reshape(B*NPD,4)
-    idx = torch.arange(0,B*NPD).unsqueeze(1).to(pred1.device)
-    align1 = torch.cat((idx,align1),dim=1)  # Add index column
-    align2 = torch.cat((idx,align2),dim=1) 
+        NPD = pred1.shape[-1]  # Pooled depth dimension
 
-    # Flatten batch and slice dimension of crops
-    pred1 = pred1.permute(0,4,1,2,3).reshape(B*NPD,K,NPH,NPW).float()
-    pred2 = pred2.permute(0,4,1,2,3).reshape(B*NPD,K,NPH,NPW).float()
-    gt1 = gt1.permute(0,4,1,2,3).reshape(B*NPD,K,NPH,NPW).float()
-    gt2 = gt2.permute(0,4,1,2,3).reshape(B*NPD,K,NPH,NPW).float()
+        # Repeat the same alignment for every slice
+        align1 = ibox1.unsqueeze(1).repeat(1,NPD,1)
+        align2 = ibox2.unsqueeze(1).repeat(1,NPD,1)
 
-    # ROI-align and restore original dimensions
+        # Preprocess alignments for roi_align
+        align1 = align1.reshape(B*NPD,4) # Flatten batch and slice dimension
+        align2 = align2.reshape(B*NPD,4)
+        idx = torch.arange(0,B*NPD).unsqueeze(1).to(pred1.device)
+        align1 = torch.cat((idx,align1),dim=1)  # Add index column
+        align2 = torch.cat((idx,align2),dim=1) 
+
+        # Flatten batch and slice dimension of crops
+        pred1 = pred1.permute(0,4,1,2,3).reshape(B*NPD,K,NPH,NPW)
+        pred2 = pred2.permute(0,4,1,2,3).reshape(B*NPD,K,NPH,NPW)
+        gt1 = gt1.permute(0,4,1,2,3).reshape(B*NPD,K,NPH,NPW)
+        gt2 = gt2.permute(0,4,1,2,3).reshape(B*NPD,K,NPH,NPW)
+    
+    elif len(pred1.shape) == 4:  # 2D input
+        align1 = ibox1
+        align2 = ibox2
+        idx = torch.arange(0,B).unsqueeze(1).to(pred1.device)
+        align1 = torch.cat((idx,align1),dim=1)  # Add index column
+        align2 = torch.cat((idx,align2),dim=1) 
+
+    # ROI-align
     # Note: the roi_align function considers [0,0] the bottom-left corner, that's why ibox is [y1,x1,y2,x2]
-    pred1_align = ops.roi_align(pred1, boxes=align1, output_size=(NPH, NPW), aligned=True).reshape(B, NPD, K, NPH, NPW).permute(0,2,3,4,1)
-    pred2_align = ops.roi_align(pred2, boxes=align2, output_size=(NPH, NPW), aligned=True).reshape(B, NPD, K, NPH, NPW).permute(0,2,3,4,1)
-    gt1_align = ops.roi_align(gt1, boxes=align1, output_size=(NPH, NPW), aligned=True).reshape(B, NPD, K, NPH, NPW).permute(0,2,3,4,1)
-    gt2_align = ops.roi_align(gt2, boxes=align2, output_size=(NPH, NPW), aligned=True).reshape(B, NPD, K, NPH, NPW).permute(0,2,3,4,1)
+    pred1_align = ops.roi_align(pred1, boxes=align1, output_size=(NPH, NPW), aligned=True)
+    pred2_align = ops.roi_align(pred2, boxes=align2, output_size=(NPH, NPW), aligned=True)
+    gt1_align = ops.roi_align(gt1, boxes=align1, output_size=(NPH, NPW), aligned=True)
+    gt2_align = ops.roi_align(gt2, boxes=align2, output_size=(NPH, NPW), aligned=True)
+
+    if len(pred1.shape) == 5:  # 3D input
+        # Restore slice dimension
+        pred1_align = pred1_align.reshape(B, NPD, K, NPH, NPW).permute(0,2,3,4,1)
+        pred2_align = pred2_align.reshape(B, NPD, K, NPH, NPW).permute(0,2,3,4,1)
+        gt1_align = gt1_align.reshape(B, NPD, K, NPH, NPW).permute(0,2,3,4,1)
+        gt2_align = gt2_align.reshape(B, NPD, K, NPH, NPW).permute(0,2,3,4,1)
 
     return pred1_align, pred2_align, gt1_align, gt2_align

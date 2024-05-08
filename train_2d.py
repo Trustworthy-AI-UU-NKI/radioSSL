@@ -306,25 +306,27 @@ def train_cluster_inner(args, epoch, train_loader, model, optimizer, criterion, 
         with torch.no_grad():
             feat1 = model.module.featup_upsampler(x1.repeat(1,3,1,1))  # Requires 3 channels
             feat2 = model.module.featup_upsampler(x2.repeat(1,3,1,1))
-        
-        # Flatten spatial dimensions to get feature vectors for each pixel
-        feat_vec1 = feat1.permute(0,2,3,1).flatten(0,2)  # B*D x C' x H x W -> B*D*H*W x C'
-        feat_vec2 = feat2.permute(0,2,3,1).flatten(0,2) 
+            
+            # Flatten spatial dimensions to get feature vectors for each pixel
+            feat_vec1 = feat1.permute(0,2,3,1).flatten(0,2)  # B*D x C' x H x W -> B*D*H*W x C'
+            feat_vec2 = feat2.permute(0,2,3,1).flatten(0,2) 
 
-        # Perform K-Means on teacher feature vectors
-        K = model.module.kmeans.n_clusters
-        # gt_vec1 = model.module.kmeans.fit_predict(x=feat_vec1.unsqueeze(0))
-        # gt_vec2 = model.module.kmeans.fit_predict(x=feat_vec2.unsqueeze(0))
-        gt_vec1 = torch.from_numpy(model.module.kmeans.fit_predict(feat_vec1.detach().cpu().numpy()))
-        gt_vec2 = torch.from_numpy(model.module.kmeans.fit_predict(feat_vec2.detach().cpu().numpy()))
-        
-        if not args.cpu:
-            gt_vec1 = gt_vec1.cuda()
-            gt_vec2 = gt_vec2.cuda()
- 
-        # Convert to one-hot encoding and restore spatial dimensions
-        gt1 = f.one_hot(gt_vec1.to(torch.int64), K).reshape(-1, H, W, K).permute(0,3,1,2)  # B*D*H*W x K -> B*D x H x W x K -> B*D x K x H x W
-        gt2 = f.one_hot(gt_vec2.to(torch.int64), K).reshape(-1, H, W, K).permute(0,3,1,2)
+            # Perform K-Means on teacher feature vectors
+            K = model.module.kmeans.n_clusters
+            # gt_vec1 = model.module.kmeans.fit_predict(x=feat_vec1.unsqueeze(0))
+            # gt_vec2 = model.module.kmeans.fit_predict(x=feat_vec2.unsqueeze(0))
+            model.module.kmeans = model.module.kmeans.fit(torch.cat([feat_vec1,feat_vec2]).detach().cpu().numpy())
+            gt_vec = torch.from_numpy(model.module.kmeans.predict(torch.cat([feat_vec1,feat_vec2]).detach().cpu().numpy()))
+            gt_vec1 = gt_vec[:gt_vec.shape[0]//2]
+            gt_vec2 = gt_vec[gt_vec.shape[0]//2:]
+
+            if not args.cpu:
+                gt_vec1 = gt_vec1.cuda()
+                gt_vec2 = gt_vec2.cuda()
+    
+            # Convert to one-hot encoding and restore spatial dimensions
+            gt1 = f.one_hot(gt_vec1.to(torch.int64), K).reshape(-1, H, W, K).permute(0,3,1,2)  # B*D*H*W x K -> B*D x H x W x K -> B*D x K x H x W
+            gt2 = f.one_hot(gt_vec2.to(torch.int64), K).reshape(-1, H, W, K).permute(0,3,1,2)
 
         # --------------------------------------------------------------
 
@@ -332,7 +334,7 @@ def train_cluster_inner(args, epoch, train_loader, model, optimizer, criterion, 
         roi_pred1, roi_pred2, roi_gt1, roi_gt2 = roi_align_intersect(pred1, pred2, gt1, gt2, crop1_coords, crop2_coords)
 
         # SwAV Loss for current scale
-        swav_loss = swav_loss(roi_gt1, roi_gt2, roi_pred1, roi_pred2)
+        loss1 = swav_loss(roi_gt1, roi_gt2, roi_pred1, roi_pred2)
 
         # Plot predictions on tensorboard
         with torch.no_grad():
@@ -374,8 +376,8 @@ def train_cluster_inner(args, epoch, train_loader, model, optimizer, criterion, 
                     gt2[gt2[:,:,0] == c] = colors[c]
                 pred1 = pred1.permute(2,1,0)
                 pred2 = pred2.permute(2,1,0)
-                gt1 = gt1.permute(2,1,0)
-                gt2 = gt2.permute(2,1,0)
+                gt1 = gt1.permute(2,0,1)
+                gt2 = gt2.permute(2,0,1)
 
                 # Pad images for better visualization                
                 in1 = f.pad(in1.unsqueeze(0),(2,1,2,2),value=1)
@@ -399,7 +401,7 @@ def train_cluster_inner(args, epoch, train_loader, model, optimizer, criterion, 
                 writer.add_image(gt_img_name, img_tensor=gt_img, global_step=epoch, dataformats='CHW')
 
         # TODO: add the other losses later
-        loss1 = swav_loss / D 
+        loss1 = loss1 / D 
         loss2 = torch.tensor(0) / D
         loss4 = 0 / D
         local_loss = 0  # / DL

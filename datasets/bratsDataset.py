@@ -33,7 +33,7 @@ class BratsPretask(Dataset):
         # Load data
         image_path = self.imgs[index]
         relative_image_path = os.path.join(*os.path.normpath(image_path).split(os.sep)[-3:])
-        relative_image_path = relative_image_path.replace('.ni','')  # TODO: This is just for debugging purposes because some old preprocessed datasets had a filename bug
+        # relative_image_path = relative_image_path.replace('.ni','')  # TODO: This is just for debugging purposes because some old preprocessed datasets had a filename bug
         pair = np.load(image_path)
         crop1 = pair[0]
         crop1 = np.expand_dims(crop1, axis=0)

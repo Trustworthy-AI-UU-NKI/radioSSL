@@ -87,8 +87,6 @@ def train_2d(args, data_loader, run_dir, out_channel=3, writer=None):
                                 lr=args.lr,
                                 momentum=args.momentum,
                                 weight_decay=args.weight_decay)
-    if args.amp:
-        model, optimizer = amp.initialize(model, optimizer, opt_level='O1')
     model = nn.DataParallel(model)
 
     criterion = nn.MSELoss()
@@ -207,11 +205,7 @@ def train_pcrlv2_inner(args, epoch, train_loader, model, optimizer, criterion, c
 
         # Backward
         optimizer.zero_grad()
-        if args.amp:
-            with amp.scale_loss(loss, optimizer) as scaled_loss:
-                scaled_loss.backward()
-        else:
-            loss.backward()
+        loss.backward()
         optimizer.step()
 
         # Meters
@@ -399,11 +393,7 @@ def train_cluster_inner(args, epoch, train_loader, model, optimizer, criterion, 
 
         # Backward
         optimizer.zero_grad()
-        if args.amp:
-            with amp.scale_loss(loss, optimizer) as scaled_loss:
-                scaled_loss.backward()
-        else:
-            loss.backward()
+        loss.backward()
         optimizer.step()
 
         # Meters

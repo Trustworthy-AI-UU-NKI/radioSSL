@@ -1,18 +1,19 @@
 from __future__ import print_function
 
-import os
 import sys
 import time
 import math
 import numpy as np
+import random
+import seaborn as sns
+
 import torch
 import torch.backends.cudnn as cudnn
 import torch.nn as nn
 import torch.nn.functional as f
-import random
-import seaborn as sns
-from tools import adjust_learning_rate, AverageMeter, swav_loss, roi_align_intersect
+
 from models import PCRLv2, Cluster
+from tools import adjust_learning_rate, AverageMeter, swav_loss, roi_align_intersect
 
 
 def Normalize(x):
@@ -63,7 +64,7 @@ def cos_loss(cosine, output1, output2):
     return loss, index
 
 
-def train_2d(args, data_loader, run_dir, out_channel=3, writer=None):
+def train_2d(args, data_loader, run_dir, writer=None):
 
     if 'cluster' in args.model:
         # Generate colors for cluster masks
@@ -233,8 +234,8 @@ def train_pcrlv2_inner(args, epoch, train_loader, model, optimizer, criterion, c
     return mg_loss_meter.avg, prob_meter.avg, total_loss_meter.avg
 
 
-def train_pcrlv2_2d(args, data_loader, run_dir, out_channel=3, writer=None):
-    train_2d(args, data_loader, run_dir, out_channel=out_channel, writer=writer)
+def train_pcrlv2_2d(args, data_loader, run_dir, writer=None):
+    train_2d(args, data_loader, run_dir, writer=writer)
 
 
 def train_cluster_inner(args, epoch, train_loader, model, optimizer, criterion, cosine, writer, colors):
@@ -421,5 +422,5 @@ def train_cluster_inner(args, epoch, train_loader, model, optimizer, criterion, 
     return mg_loss_meter.avg, prob_meter.avg, total_loss_meter.avg
 
 
-def train_cluster_2d(args, data_loader, run_dir, out_channel=3, writer=None):
-    train_2d(args, data_loader, run_dir, out_channel=out_channel, writer=writer)
+def train_cluster_2d(args, data_loader, run_dir, writer=None):
+    train_2d(args, data_loader, run_dir, writer=writer)

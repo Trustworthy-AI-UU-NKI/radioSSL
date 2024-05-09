@@ -4,8 +4,6 @@ Training code for C2L
 """
 from __future__ import print_function
 
-import os
-import io
 import sys
 import time
 import math
@@ -254,8 +252,8 @@ def train_pcrlv2_inner(args, epoch, train_loader, model, optimizer, criterion, c
     return mg_loss_meter.avg, prob_meter.avg, total_loss_meter.avg, writer
 
 
-def train_pcrlv2_3d(args, data_loader, run_dir, out_channel=3, writer=None):
-    train_3d(args, data_loader, run_dir, out_channel=out_channel, writer=writer)
+def train_pcrlv2_3d(args, data_loader, run_dir, writer=None):
+    train_3d(args, data_loader, run_dir, writer=writer)
 
 
 def train_cluster_inner(args, epoch, train_loader, model, optimizer, criterion, cosine, writer, colors):
@@ -520,5 +518,5 @@ def val_cluster_inner(args, epoch, val_loader, model, colors):
     return grid_pred_all
 
 
-def train_cluster_3d(args, data_loader, run_dir, out_channel=3, writer=None):
-    train_3d(args, data_loader, run_dir, out_channel=out_channel, writer=writer)
+def train_cluster_3d(args, data_loader, run_dir, writer=None):
+    train_3d(args, data_loader, run_dir, writer=writer)

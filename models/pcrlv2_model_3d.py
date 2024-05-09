@@ -174,7 +174,7 @@ class PCRLv23d(nn.Module):
 
 class Cluster3d(nn.Module):
     def __init__(self, in_channels=1, n_clusters=50, act='relu', norm='bn', skip_conn=False, seed=1):
-        super(PCRLv23d, self).__init__()
+        super(Cluster3d, self).__init__()
         self.maxpool = nn.MaxPool3d(2)
         self.down_tr64 = DownTransition(in_channels, 0, act, norm)
         self.down_tr128 = DownTransition(64, 1, act, norm)

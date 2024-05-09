@@ -18,6 +18,7 @@ import torch.backends.cudnn as cudnn
 import torch.nn as nn
 import torch.nn.functional as f
 import torchvision.transforms.functional as t
+from torch import autocast
 
 from models import PCRLv23d, Cluster3d, TraceWrapper
 from tools import adjust_learning_rate, AverageMeter, sinkhorn, swav_loss, roi_align_intersect
@@ -60,8 +61,7 @@ def train_3d(args, data_loader, run_dir, writer=None):
     if args.model == 'pcrlv2':
         model = PCRLv23d(skip_conn=args.skip_conn)
     elif 'cluster' in args.model:
-        multi_scale = True if 'ms' in args.model else False
-        model = Cluster3d(n_clusters=args.k, multi_scale=multi_scale, seed=args.seed)
+        model = Cluster3d(n_clusters=args.k, seed=args.seed)
     if not args.cpu:
         model = model.cuda()
 
@@ -283,136 +283,138 @@ def train_cluster_inner(args, epoch, train_loader, model, optimizer, criterion, 
             crop1_coords = crop1_coords.cuda()
             crop2_coords = crop2_coords.cuda()
 
-        # STUDENT CLUSTER ASSIGNMENT ------------------------------------
+        device_type = 'cpu' if args.cpu else 'cuda'
+        with autocast(device_type=device_type):  # Run in mixed-precision
 
-        # Get cluster predictions from student U-Net
-        pred1 = model.module(x1)
-        pred2 = model.module(x2)
+            # STUDENT CLUSTER ASSIGNMENT ------------------------------------
+
+            # Get cluster predictions from student U-Net
+            pred1 = model.module(x1)
+            pred2 = model.module(x2)
+            
+            # Convert to probabilities
+            pred1 = pred1.softmax(2)
+            pred2 = pred2.softmax(2)
+
+            # TEACHER CLUSTER ASSIGNMENT ------------------------------------
+
+            with torch.no_grad():
+                # Get upsampled features from teacher DINO ViT16 encoder
+                B, C, H, W, D = x1.shape
+                #  B x 1 x H x W x D -> B*D x 1 x H x W ->  B*D x 3 x H x W -> B*D x C' x H x W -> B*D*H*W x C' 
+                feat_vec1 = model.module.featup_upsampler(x1.permute(0,4,1,2,3).reshape(B*D,C,H,W).repeat(1,3,1,1)).permute(0,2,3,1).flatten(0,2)
+                feat_vec2 = model.module.featup_upsampler(x2.permute(0,4,1,2,3).reshape(B*D,C,H,W).repeat(1,3,1,1)).permute(0,2,3,1).flatten(0,2) 
+
+                # Perform K-Means on teacher feature vectors
+                K = model.module.kmeans.n_clusters
+                # gt_vec1 = model.module.kmeans.fit_predict(x=feat_vec1.unsqueeze(0))
+                # gt_vec2 = model.module.kmeans.fit_predict(x=feat_vec2.unsqueeze(0))
+                model.module.kmeans = model.module.kmeans.fit(torch.cat([feat_vec1,feat_vec2]).detach().cpu().numpy())
+                gt_vec = torch.from_numpy(model.module.kmeans.predict(torch.cat([feat_vec1,feat_vec2]).detach().cpu().numpy())).cuda().to(torch.int64)
+
+                if not args.cpu:
+                    gt_vec1 = gt_vec1.cuda()
+                    gt_vec2 = gt_vec2.cuda()
         
-        # Convert to probabilities
-        pred1 = pred1.softmax(2)
-        pred2 = pred2.softmax(2)
+                # Convert to one-hot encoding and restore spatial dimensions
+                gt1 = f.one_hot(gt_vec[:gt_vec.shape[0]//2], K).reshape(-1, H, W, K).permute(0,4,2,3,1)  # B*D*H*W x K -> B x D x H x W x K -> B x K x H x W x D
+                gt2 = f.one_hot(gt_vec[gt_vec.shape[0]//2:], K).reshape(-1, H, W, K).permute(0,4,2,3,1)
 
-        # TEACHER CLUSTER ASSIGNMENT ------------------------------------
+            # --------------------------------------------------------------
 
-        with torch.no_grad():
-            # Get upsampled features from teacher DINO ViT16 encoder
-            B, C, H, W, D = x1.shape
-            #  B x 1 x H x W x D -> B*D x 1 x H x W ->  B*D x 3 x H x W -> B*D x C' x H x W -> B*D*H*W x C' 
-            feat_vec1 = model.module.featup_upsampler(x1.permute(0,4,1,2,3).reshape(B*D,C,H,W).repeat(1,3,1,1)).permute(0,2,3,1).flatten(0,2)
-            feat_vec2 = model.module.featup_upsampler(x2.permute(0,4,1,2,3).reshape(B*D,C,H,W).repeat(1,3,1,1)).permute(0,2,3,1).flatten(0,2) 
+            # ROI-align crop intersection with cluster assignment intersection
+            roi_pred1, roi_pred2, roi_gt1, roi_gt2 = roi_align_intersect(pred1, pred2, gt1, gt2, crop1_coords, crop2_coords)
 
-            # Perform K-Means on teacher feature vectors
-            K = model.module.kmeans.n_clusters
-            # gt_vec1 = model.module.kmeans.fit_predict(x=feat_vec1.unsqueeze(0))
-            # gt_vec2 = model.module.kmeans.fit_predict(x=feat_vec2.unsqueeze(0))
-            model.module.kmeans = model.module.kmeans.fit(torch.cat([feat_vec1,feat_vec2]).detach().cpu().numpy())
-            gt_vec = torch.from_numpy(model.module.kmeans.predict(torch.cat([feat_vec1,feat_vec2]).detach().cpu().numpy())).cuda().to(torch.int64)
+            # SwAV Loss for current scale
+            scale_swav_loss = swav_loss(roi_gt1, roi_gt2, roi_pred1, roi_pred2)
 
-            if not args.cpu:
-                gt_vec1 = gt_vec1.cuda()
-                gt_vec2 = gt_vec2.cuda()
-    
-            # Convert to one-hot encoding and restore spatial dimensions
-            gt1 = f.one_hot(gt_vec[:gt_vec.shape[0]//2], K).reshape(-1, H, W, K).permute(0,4,2,3,1)  # B*D*H*W x K -> B x D x H x W x K -> B x K x H x W x D
-            gt2 = f.one_hot(gt_vec[gt_vec.shape[0]//2:], K).reshape(-1, H, W, K).permute(0,4,2,3,1)
+            # Plot predictions on tensorboard
+            with torch.no_grad():
+                b_idx = 0
+                if args.vis and idx==b_idx: #and epoch % 10 == 0:
 
-        # --------------------------------------------------------------
+                    # Select 2D images
+                    img_idx = 0
+                    m_idx = 0
+                    s_idx = D//2
+                    in1 = x1[img_idx,m_idx,:,:,s_idx].unsqueeze(0)
+                    in2 = x2[img_idx,m_idx,:,:,s_idx].unsqueeze(0)
+                    pred1 = pred1[img_idx,:,:,:,s_idx].argmax(dim=0).unsqueeze(0)  # Take only hard cluster assignment (argmax)
+                    pred2 = pred2[img_idx,:,:,:,s_idx].argmax(dim=0).unsqueeze(0)
+                    gt1 = gt1[img_idx,:,:,:,s_idx].argmax(dim=0).unsqueeze(0)
+                    gt2 = gt2[img_idx,:,:,:,s_idx].argmax(dim=0).unsqueeze(0)
 
+                    # Min-max norm input images
+                    in1 = (in1 - in1.min())/(in1.max() - in1.min())
+                    in2 = (in2 - in2.min())/(in2.max() - in2.min())
 
-        # ROI-align crop intersection with cluster assignment intersection
-        roi_pred1, roi_pred2, roi_gt1, roi_gt2 = roi_align_intersect(pred1, pred2, gt1, gt2, crop1_coords, crop2_coords)
+                    # Interpolate cluster masks to original input shape
+                    pred1 = f.interpolate(pred1.float().unsqueeze(0), size=(H,W)).squeeze(0)
+                    pred2 = f.interpolate(pred2.float().unsqueeze(0), size=(H,W)).squeeze(0)
+                    gt1 = f.interpolate(gt1.float().unsqueeze(0), size=(H,W)).squeeze(0)
+                    gt2 = f.interpolate(gt2.float().unsqueeze(0), size=(H,W)).squeeze(0)
 
-        # SwAV Loss for current scale
-        scale_swav_loss = swav_loss(roi_gt1, roi_gt2, roi_pred1, roi_pred2)
+                    # Send to cpu
+                    in1 = in1.cpu().detach()
+                    in2 = in2.cpu().detach()
+                    pred1 = pred1.cpu().detach()
+                    pred2 = pred2.cpu().detach()
+                    gt1 = gt1.cpu().detach()
+                    gt2 = gt2.cpu().detach()
 
-        # Plot predictions on tensorboard
-        with torch.no_grad():
-            b_idx = 0
-            if args.vis and idx==b_idx: #and epoch % 10 == 0:
+                    # Give color to each cluster in cluster masks
+                    pred1 = pred1.repeat((3,1,1)).permute(1,2,0)  # Convert to RGB and move channel dim to the end
+                    pred2 = pred2.repeat((3,1,1)).permute(1,2,0)
+                    gt1 = gt1.repeat((3,1,1)).permute(1,2,0)
+                    gt2 = gt2.repeat((3,1,1)).permute(1,2,0)
+                    for c in range(colors.shape[0]):
+                        pred1[pred1[:,:,0] == c] = colors[c]
+                        pred2[pred2[:,:,0] == c] = colors[c]
+                        gt1[gt1[:,:,0] == c] = colors[c]
+                        gt2[gt2[:,:,0] == c] = colors[c]
+                    pred1 = pred1.permute(2,1,0)
+                    pred2 = pred2.permute(2,1,0)
+                    gt1 = gt1.permute(2,1,0)
+                    gt2 = gt2.permute(2,1,0)
 
-                # Select 2D images
-                img_idx = 0
-                m_idx = 0
-                s_idx = D//2
-                in1 = x1[img_idx,m_idx,:,:,s_idx].unsqueeze(0)
-                in2 = x2[img_idx,m_idx,:,:,s_idx].unsqueeze(0)
-                pred1 = pred1[img_idx,:,:,:,s_idx].argmax(dim=0).unsqueeze(0)  # Take only hard cluster assignment (argmax)
-                pred2 = pred2[img_idx,:,:,:,s_idx].argmax(dim=0).unsqueeze(0)
-                gt1 = gt1[img_idx,:,:,:,s_idx].argmax(dim=0).unsqueeze(0)
-                gt2 = gt2[img_idx,:,:,:,s_idx].argmax(dim=0).unsqueeze(0)
+                    # Pad images for better visualization                
+                    in1 = f.pad(in1.unsqueeze(0),(2,1,2,2),value=1)
+                    in2 = f.pad(in2.unsqueeze(0),(1,2,2,2),value=1)
+                    pred1 = f.pad(pred1.unsqueeze(0),(2,1,2,2),value=1)
+                    pred2 = f.pad(pred2.unsqueeze(0),(1,2,2,2),value=1)
+                    gt1 = f.pad(gt1.unsqueeze(0),(2,1,2,2),value=1)
+                    gt2 = f.pad(gt2.unsqueeze(0),(1,2,2,2),value=1)
 
-                # Min-max norm input images
-                in1 = (in1 - in1.min())/(in1.max() - in1.min())
-                in2 = (in2 - in2.min())/(in2.max() - in2.min())
+                    # Combine crops and save in tensorboard
+                    in_img = torch.cat((in1,in2),dim=3).squeeze(0).cpu().detach().numpy()
+                    pred_img = torch.cat((pred1,pred2),dim=3).squeeze(0).cpu().detach().numpy()
+                    gt_img = torch.cat((gt1,gt2),dim=3).squeeze(0).cpu().detach().numpy()
 
-                # Interpolate cluster masks to original input shape
-                pred1 = f.interpolate(pred1.float().unsqueeze(0), size=(H,W)).squeeze(0)
-                pred2 = f.interpolate(pred2.float().unsqueeze(0), size=(H,W)).squeeze(0)
-                gt1 = f.interpolate(gt1.float().unsqueeze(0), size=(H,W)).squeeze(0)
-                gt2 = f.interpolate(gt2.float().unsqueeze(0), size=(H,W)).squeeze(0)
+                    in_img_name = 'img/train/raw' 
+                    pred_img_name = f'img/train/pred'
+                    gt_img_name = f'img/train/gt'
 
-                # Send to cpu
-                in1 = in1.cpu().detach()
-                in2 = in2.cpu().detach()
-                pred1 = pred1.cpu().detach()
-                pred2 = pred2.cpu().detach()
-                gt1 = gt1.cpu().detach()
-                gt2 = gt2.cpu().detach()
+                    writer.add_image(in_img_name, img_tensor=in_img, global_step=epoch, dataformats='CHW')
+                    writer.add_image(pred_img_name, img_tensor=pred_img, global_step=epoch, dataformats='CHW')   
+                    writer.add_image(gt_img_name, img_tensor=gt_img, global_step=epoch, dataformats='CHW')
 
-                # Give color to each cluster in cluster masks
-                pred1 = pred1.repeat((3,1,1)).permute(1,2,0)  # Convert to RGB and move channel dim to the end
-                pred2 = pred2.repeat((3,1,1)).permute(1,2,0)
-                gt1 = gt1.repeat((3,1,1)).permute(1,2,0)
-                gt2 = gt2.repeat((3,1,1)).permute(1,2,0)
-                for c in range(colors.shape[0]):
-                    pred1[pred1[:,:,0] == c] = colors[c]
-                    pred2[pred2[:,:,0] == c] = colors[c]
-                    gt1[gt1[:,:,0] == c] = colors[c]
-                    gt2[gt2[:,:,0] == c] = colors[c]
-                pred1 = pred1.permute(2,1,0)
-                pred2 = pred2.permute(2,1,0)
-                gt1 = gt1.permute(2,1,0)
-                gt2 = gt2.permute(2,1,0)
+            # TODO: add the other losses later
+            loss1 = scale_swav_loss
+            loss2 = torch.tensor(0)
+            loss4 = 0
+            local_loss = 0
 
-                # Pad images for better visualization                
-                in1 = f.pad(in1.unsqueeze(0),(2,1,2,2),value=1)
-                in2 = f.pad(in2.unsqueeze(0),(1,2,2,2),value=1)
-                pred1 = f.pad(pred1.unsqueeze(0),(2,1,2,2),value=1)
-                pred2 = f.pad(pred2.unsqueeze(0),(1,2,2,2),value=1)
-                gt1 = f.pad(gt1.unsqueeze(0),(2,1,2,2),value=1)
-                gt2 = f.pad(gt2.unsqueeze(0),(1,2,2,2),value=1)
+            # Total Loss
+            # TODO: add the other losses later
+            loss = loss1 
 
-                # Combine crops and save in tensorboard
-                in_img = torch.cat((in1,in2),dim=3).squeeze(0).cpu().detach().numpy()
-                pred_img = torch.cat((pred1,pred2),dim=3).squeeze(0).cpu().detach().numpy()
-                gt_img = torch.cat((gt1,gt2),dim=3).squeeze(0).cpu().detach().numpy()
-
-                in_img_name = 'img/train/raw' 
-                pred_img_name = f'img/train/pred'
-                gt_img_name = f'img/train/gt'
-
-                writer.add_image(in_img_name, img_tensor=in_img, global_step=epoch, dataformats='CHW')
-                writer.add_image(pred_img_name, img_tensor=pred_img, global_step=epoch, dataformats='CHW')   
-                writer.add_image(gt_img_name, img_tensor=gt_img, global_step=epoch, dataformats='CHW')
-
-        # TODO: add the other losses later
-        loss1 = scale_swav_loss
-        loss2 = torch.tensor(0)
-        loss4 = 0
-        local_loss = 0
-
-        # Total Loss
-        # TODO: add the other losses later
-        loss = loss1 
-
-        # Backward
-        if loss > 1000 and epoch > 10:
-            print('skip the step')
-            continue
-        optimizer.zero_grad()
-        loss.backward()
-        optimizer.step()
+            # Backward
+            if loss > 1000 and epoch > 10:
+                print('skip the step')
+                continue
+            optimizer.zero_grad()
+            loss.backward()
+            optimizer.step()
 
         # Meters
         mg_loss_meter.update(loss1.item(), B)

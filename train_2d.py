@@ -11,6 +11,7 @@ import torch
 import torch.backends.cudnn as cudnn
 import torch.nn as nn
 import torch.nn.functional as f
+from torch import autocast
 
 from models import PCRLv2, Cluster
 from tools import adjust_learning_rate, AverageMeter, swav_loss, roi_align_intersect
@@ -105,7 +106,7 @@ def train_2d(args, data_loader, run_dir, writer=None):
         print("==> training...")
 
         time1 = time.time()
-
+        
         if args.model == 'pcrlv2':
             loss, prob, total_loss = train_pcrlv2_inner(args, epoch, train_loader, model, optimizer, criterion, cosine, writer)
         elif 'cluster' in args.model:
@@ -167,7 +168,7 @@ def train_pcrlv2_inner(args, epoch, train_loader, model, optimizer, criterion, c
         x2 = x2.permute(0,4,1,2,3).reshape(B*D,M,H,W)
         gt1 = gt1.permute(0,4,1,2,3).reshape(B*D,M,H,W)
         gt2 = gt2.permute(0,4,1,2,3).reshape(B*D,M,H,W)
-
+        
         decoder_outputs1, mask1, middle_masks1 = model(x1)
         decoder_outputs2, mask2, _ = model(x2)
 
@@ -277,125 +278,127 @@ def train_cluster_inner(args, epoch, train_loader, model, optimizer, criterion, 
         # crop1_coords = crop1_coords[0:2]
         # crop2_coords = crop1_coords[0:2]
 
-        # STUDENT CLUSTER ASSIGNMENT ------------------------------------
+        device_type = 'cpu' if args.cpu else 'cuda'
+        with autocast(device_type=device_type):  # Run in mixed-precision
 
-        # Get cluster predictions from student U-Net
-        pred1 = model.module(x1)
-        pred2 = model.module(x2)
-        
-        # Convert to probabilities
-        pred1 = pred1.softmax(2)
-        pred2 = pred2.softmax(2)
+            # STUDENT CLUSTER ASSIGNMENT ------------------------------------
 
-        # TEACHER CLUSTER ASSIGNMENT ------------------------------------
+            # Get cluster predictions from student U-Net
+            pred1 = model.module(x1)
+            pred2 = model.module(x2)
+            
+            # Convert to probabilities
+            pred1 = pred1.softmax(2)
+            pred2 = pred2.softmax(2)
 
-        with torch.no_grad():
-            # Get upsampled features from teacher DINO ViT16 encoder and flatten spatial dimensions to get feature vectors for each pixel
-            #  B*D x 1 x H x W ->  B*D x 3 x H x W -> B*D x C' x H x W -> B*D*H*W x C' 
-            feat_vec1 = model.module.featup_upsampler(x1.repeat(1,3,1,1)).permute(0,2,3,1).flatten(0,2)  
-            feat_vec2 = model.module.featup_upsampler(x2.repeat(1,3,1,1)).permute(0,2,3,1).flatten(0,2) 
+            # TEACHER CLUSTER ASSIGNMENT ------------------------------------
 
-            # Perform K-Means on teacher feature vectors
-            K = model.module.kmeans.n_clusters
-            # gt_vec1 = model.module.kmeans.fit_predict(x=feat_vec1.unsqueeze(0))
-            # gt_vec2 = model.module.kmeans.fit_predict(x=feat_vec2.unsqueeze(0))
-            model.module.kmeans = model.module.kmeans.fit(torch.cat([feat_vec1,feat_vec2]).detach().cpu().numpy())
-            gt_vec = torch.from_numpy(model.module.kmeans.predict(torch.cat([feat_vec1,feat_vec2]).detach().cpu().numpy())).cuda().to(torch.int64)
+            with torch.no_grad():
+                # Get upsampled features from teacher DINO ViT16 encoder and flatten spatial dimensions to get feature vectors for each pixel
+                #  B*D x 1 x H x W ->  B*D x 3 x H x W -> B*D x C' x H x W -> B*D*H*W x C' 
+                feat_vec1 = model.module.featup_upsampler(x1.repeat(1,3,1,1)).permute(0,2,3,1).flatten(0,2)  
+                feat_vec2 = model.module.featup_upsampler(x2.repeat(1,3,1,1)).permute(0,2,3,1).flatten(0,2) 
 
-            if not args.cpu:
-                gt_vec1 = gt_vec1.cuda()
-                gt_vec2 = gt_vec2.cuda()
-    
-            # Convert to one-hot encoding and restore spatial dimensions
-            gt1 = f.one_hot(gt_vec[:gt_vec.shape[0]//2], K).reshape(-1, H, W, K).permute(0,3,1,2)  # B*D*H*W x K -> B*D x H x W x K -> B*D x K x H x W
-            gt2 = f.one_hot(gt_vec[gt_vec.shape[0]//2:], K).reshape(-1, H, W, K).permute(0,3,1,2)
+                # Perform K-Means on teacher feature vectors
+                K = model.module.kmeans.n_clusters
+                # gt_vec1 = model.module.kmeans.fit_predict(x=feat_vec1.unsqueeze(0))
+                # gt_vec2 = model.module.kmeans.fit_predict(x=feat_vec2.unsqueeze(0))
+                model.module.kmeans = model.module.kmeans.fit(torch.cat([feat_vec1,feat_vec2]).detach().cpu().numpy())
+                gt_vec = torch.from_numpy(model.module.kmeans.predict(torch.cat([feat_vec1,feat_vec2]).detach().cpu().numpy())).cuda().to(torch.int64)
 
-        # --------------------------------------------------------------
+                if not args.cpu:
+                    gt_vec = gt_vec.cuda()
 
-        # ROI-align crop intersection with cluster assignment intersection
-        roi_pred1, roi_pred2, roi_gt1, roi_gt2 = roi_align_intersect(pred1, pred2, gt1, gt2, crop1_coords, crop2_coords)
+                # Convert to one-hot encoding and restore spatial dimensions
+                gt1 = f.one_hot(gt_vec[:gt_vec.shape[0]//2], K).reshape(-1, H, W, K).permute(0,3,1,2)  # B*D*H*W x K -> B*D x H x W x K -> B*D x K x H x W
+                gt2 = f.one_hot(gt_vec[gt_vec.shape[0]//2:], K).reshape(-1, H, W, K).permute(0,3,1,2)
 
-        # SwAV Loss for current scale
-        loss1 = swav_loss(roi_gt1, roi_gt2, roi_pred1, roi_pred2)
+            # --------------------------------------------------------------
 
-        # Plot predictions on tensorboard
-        with torch.no_grad():
-            b_idx = 0
-            if args.vis and idx==b_idx: #and epoch % 10 == 0:
+            # ROI-align crop intersection with cluster assignment intersection
+            roi_pred1, roi_pred2, roi_gt1, roi_gt2 = roi_align_intersect(pred1, pred2, gt1, gt2, crop1_coords, crop2_coords)
 
-                # Select images
-                img_idx = D//2 # TODO: D//2
-                m_idx = 0
-                c_idx = 0
-                in1 = x1[img_idx,m_idx,:,:].unsqueeze(0)
-                in2 = x2[img_idx,m_idx,:,:].unsqueeze(0)
-                pred1 = pred1[img_idx,:,:,:].argmax(dim=0).unsqueeze(0)  # Take only hard cluster assignment (argmax)
-                pred2 = pred2[img_idx,:,:,:].argmax(dim=0).unsqueeze(0)
-                gt1 = gt1[img_idx,:,:,:].argmax(dim=0).unsqueeze(0)
-                gt2 = gt2[img_idx,:,:,:].argmax(dim=0).unsqueeze(0)
+            # SwAV Loss for current scale
+            loss1 = swav_loss(roi_gt1, roi_gt2, roi_pred1, roi_pred2)
 
-                # Min-max norm input images
-                in1 = (in1 - in1.min())/(in1.max() - in1.min())
-                in2 = (in2 - in2.min())/(in2.max() - in2.min())
+            # Plot predictions on tensorboard
+            with torch.no_grad():
+                b_idx = 0
+                if args.vis and idx==b_idx: #and epoch % 10 == 0:
 
-                # Send to cpu
-                in1 = in1.cpu().detach()
-                in2 = in2.cpu().detach()
-                pred1 = pred1.cpu().detach()
-                pred2 = pred2.cpu().detach()
-                gt1 = gt1.cpu().detach()
-                gt2 = gt2.cpu().detach()
+                    # Select images
+                    img_idx = D//2 # TODO: D//2
+                    m_idx = 0
+                    c_idx = 0
+                    in1 = x1[img_idx,m_idx,:,:].unsqueeze(0)
+                    in2 = x2[img_idx,m_idx,:,:].unsqueeze(0)
+                    pred1 = pred1[img_idx,:,:,:].argmax(dim=0).unsqueeze(0)  # Take only hard cluster assignment (argmax)
+                    pred2 = pred2[img_idx,:,:,:].argmax(dim=0).unsqueeze(0)
+                    gt1 = gt1[img_idx,:,:,:].argmax(dim=0).unsqueeze(0)
+                    gt2 = gt2[img_idx,:,:,:].argmax(dim=0).unsqueeze(0)
 
-                # Give color to each cluster in cluster masks
-                pred1 = pred1.repeat((3,1,1)).permute(1,2,0).float()  # Convert to RGB and move channel dim to the end
-                pred2 = pred2.repeat((3,1,1)).permute(1,2,0).float()
-                gt1 = gt1.repeat((3,1,1)).permute(1,2,0).float()
-                gt2 = gt2.repeat((3,1,1)).permute(1,2,0).float()
-                for c in range(colors.shape[0]):
-                    pred1[pred1[:,:,0] == c] = colors[c]
-                    pred2[pred2[:,:,0] == c] = colors[c]
-                    gt1[gt1[:,:,0] == c] = colors[c]
-                    gt2[gt2[:,:,0] == c] = colors[c]
-                pred1 = pred1.permute(2,1,0)
-                pred2 = pred2.permute(2,1,0)
-                gt1 = gt1.permute(2,0,1)
-                gt2 = gt2.permute(2,0,1)
+                    # Min-max norm input images
+                    in1 = (in1 - in1.min())/(in1.max() - in1.min())
+                    in2 = (in2 - in2.min())/(in2.max() - in2.min())
 
-                # Pad images for better visualization                
-                in1 = f.pad(in1.unsqueeze(0),(2,1,2,2),value=1)
-                in2 = f.pad(in2.unsqueeze(0),(1,2,2,2),value=1)
-                pred1 = f.pad(pred1.unsqueeze(0),(2,1,2,2),value=1)
-                pred2 = f.pad(pred2.unsqueeze(0),(1,2,2,2),value=1)
-                gt1 = f.pad(gt1.unsqueeze(0),(2,1,2,2),value=1)
-                gt2 = f.pad(gt2.unsqueeze(0),(1,2,2,2),value=1)
+                    # Send to cpu
+                    in1 = in1.cpu().detach()
+                    in2 = in2.cpu().detach()
+                    pred1 = pred1.cpu().detach()
+                    pred2 = pred2.cpu().detach()
+                    gt1 = gt1.cpu().detach()
+                    gt2 = gt2.cpu().detach()
 
-                # Combine crops and save in tensorboard
-                in_img = torch.cat((in1,in2),dim=3).squeeze(0).cpu().detach().numpy()
-                pred_img = torch.cat((pred1,pred2),dim=3).squeeze(0).cpu().detach().numpy()
-                gt_img = torch.cat((gt1,gt2),dim=3).squeeze(0).cpu().detach().numpy()
+                    # Give color to each cluster in cluster masks
+                    pred1 = pred1.repeat((3,1,1)).permute(1,2,0).float()  # Convert to RGB and move channel dim to the end
+                    pred2 = pred2.repeat((3,1,1)).permute(1,2,0).float()
+                    gt1 = gt1.repeat((3,1,1)).permute(1,2,0).float()
+                    gt2 = gt2.repeat((3,1,1)).permute(1,2,0).float()
+                    for c in range(colors.shape[0]):
+                        pred1[pred1[:,:,0] == c] = colors[c]
+                        pred2[pred2[:,:,0] == c] = colors[c]
+                        gt1[gt1[:,:,0] == c] = colors[c]
+                        gt2[gt2[:,:,0] == c] = colors[c]
+                    pred1 = pred1.permute(2,1,0)
+                    pred2 = pred2.permute(2,1,0)
+                    gt1 = gt1.permute(2,0,1)
+                    gt2 = gt2.permute(2,0,1)
 
-                in_img_name = 'img/train/raw' 
-                pred_img_name = f'img/train/pred'
-                gt_img_name = f'img/train/gt'
+                    # Pad images for better visualization                
+                    in1 = f.pad(in1.unsqueeze(0),(2,1,2,2),value=1)
+                    in2 = f.pad(in2.unsqueeze(0),(1,2,2,2),value=1)
+                    pred1 = f.pad(pred1.unsqueeze(0),(2,1,2,2),value=1)
+                    pred2 = f.pad(pred2.unsqueeze(0),(1,2,2,2),value=1)
+                    gt1 = f.pad(gt1.unsqueeze(0),(2,1,2,2),value=1)
+                    gt2 = f.pad(gt2.unsqueeze(0),(1,2,2,2),value=1)
 
-                writer.add_image(in_img_name, img_tensor=in_img, global_step=epoch, dataformats='CHW')
-                writer.add_image(pred_img_name, img_tensor=pred_img, global_step=epoch, dataformats='CHW')   
-                writer.add_image(gt_img_name, img_tensor=gt_img, global_step=epoch, dataformats='CHW')
+                    # Combine crops and save in tensorboard
+                    in_img = torch.cat((in1,in2),dim=3).squeeze(0).cpu().detach().numpy()
+                    pred_img = torch.cat((pred1,pred2),dim=3).squeeze(0).cpu().detach().numpy()
+                    gt_img = torch.cat((gt1,gt2),dim=3).squeeze(0).cpu().detach().numpy()
 
-        # TODO: add the other losses later
-        loss1 = loss1 / D 
-        loss2 = torch.tensor(0) / D
-        loss4 = 0 / D
-        local_loss = 0  # / DL
+                    in_img_name = 'img/train/raw' 
+                    pred_img_name = f'img/train/pred'
+                    gt_img_name = f'img/train/gt'
 
-        # Total Loss
-        # TODO: add the other losses later
-        loss = loss1
+                    writer.add_image(in_img_name, img_tensor=in_img, global_step=epoch, dataformats='CHW')
+                    writer.add_image(pred_img_name, img_tensor=pred_img, global_step=epoch, dataformats='CHW')   
+                    writer.add_image(gt_img_name, img_tensor=gt_img, global_step=epoch, dataformats='CHW')
 
-        # Backward
-        optimizer.zero_grad()
-        loss.backward()
-        optimizer.step()
+            # TODO: add the other losses later
+            loss1 = loss1 / D 
+            loss2 = torch.tensor(0) / D
+            loss4 = 0 / D
+            local_loss = 0  # / DL
+
+            # Total Loss
+            # TODO: add the other losses later
+            loss = loss1
+
+            # Backward
+            optimizer.zero_grad()
+            loss.backward()
+            optimizer.step()
 
         # Meters
         mg_loss_meter.update(loss1.item(), B)

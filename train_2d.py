@@ -251,6 +251,7 @@ def train_cluster_inner(args, epoch, train_loader, model, optimizer, scaler, wri
     """
 
     model.train()
+    model.module.featup.eval()
     batch_time = AverageMeter()
     data_time = AverageMeter()
     loss_meter = AverageMeter()
@@ -304,9 +305,9 @@ def train_cluster_inner(args, epoch, train_loader, model, optimizer, scaler, wri
                 feat_vec1 = []
                 feat_vec2 = []
                 for i in range(B):  # For cuda memory efficiency, enter only 1 (actual) batch at a time (It's actually a batch with all the 2D slices from the 3D input)
-                    #  B x 1 x H x W x D -(Flatten slices)-> B*D x 1 x H x W -(RGB)->  B*D x 3 x H x W -(FeatUp)-> B*D x C' x H x W -(Vectorize)-> B*D*H*W x C' 
-                    feat_vec1.append(model.module.featup_upsampler(x1[i].unsqueeze(0).repeat(1,3,1,1)).permute(0,2,3,1).flatten(0,2))
-                    feat_vec2.append(model.module.featup_upsampler(x2[i].unsqueeze(0).repeat(1,3,1,1)).permute(0,2,3,1).flatten(0,2))
+                    # B*D x 1 x H x W -(RGB)->  B*D x 3 x H x W -(FeatUp)-> B*D x C' x H x W -(Vectorize)-> B*D*H*W x C' 
+                    feat_vec1.append(model.module.featup(x1[i:i+D].repeat(1,3,1,1)).permute(0,2,3,1).flatten(0,2))
+                    feat_vec2.append(model.module.featup(x2[i:i+D].repeat(1,3,1,1)).permute(0,2,3,1).flatten(0,2))
                 feat_vec1 = torch.cat(feat_vec1)
                 feat_vec2 = torch.cat(feat_vec2)
 

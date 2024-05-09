@@ -186,18 +186,7 @@ class Cluster3d(nn.Module):
         self.up_tr64 = UpTransition(128, 128, 0, act, norm, skip_conn=skip_conn)
         self.out_tr = OutputTransition(64, n_clusters)
         self.sigmoid = nn.Sigmoid()
-        if torch.cuda.is_available():
-            self.featup_upsampler = torch.hub.load("mhamilton723/FeatUp", 'dino16', use_norm=False)
-        else:
-            self.featup_upsampler = torch.hub.load("mhamilton723/FeatUp", 'dino16', use_norm=False, pretrained=False)
-            model_dict = self.featup_upsampler.state_dict()
-            upsampler_dict = torch.hub.load_state_dict_from_url('https://marhamilresearch4.blob.core.windows.net/feature-upsampling-public/pretrained/dino16_jbu_stack_cocostuff.ckpt', map_location="cpu")['state_dict']
-            encoder_dict = torch.hub.load_state_dict_from_url('https://dl.fbaipublicfiles.com/dino/dino_deitsmall16_pretrain/dino_deitsmall16_pretrain.pth', map_location="cpu")
-            for k, v in encoder_dict.items():
-                model_dict['model.model.' + k] = v
-            for k, v in upsampler_dict.items():
-                model_dict[k] = v
-            self.featup_upsampler.load_state_dict(model_dict)
+        self.featup_upsampler = torch.hub.load("mhamilton723/FeatUp", 'dinov2', use_norm=False)
         # self.kmeans = KMeans(n_clusters=n_clusters, seed=seed)
         self.kmeans = KMeans(n_clusters=n_clusters, random_state=seed)
         self.skip_conn=skip_conn

@@ -12,6 +12,8 @@ import math
 import random
 import PIL
 import numpy as np
+import seaborn as sns
+from matplotlib import pyplot as plt
 
 import torch
 import torch.backends.cudnn as cudnn
@@ -19,17 +21,8 @@ import torch.nn as nn
 import torch.nn.functional as f
 import torchvision.transforms.functional as t
 
-import seaborn as sns
-from matplotlib import pyplot as plt
-
 from models import PCRLv23d, Cluster3d, TraceWrapper
 from tools import adjust_learning_rate, AverageMeter, sinkhorn, swav_loss, roi_align_intersect
-
-
-try:
-    from apex import amp, optimizers
-except ImportError:
-    pass
 
 
 def Normalize(x):
@@ -53,7 +46,7 @@ def cos_loss(cosine, output1, output2):
     return loss, index
 
 
-def train_3d(args, data_loader, run_dir, out_channel=3, writer=None):
+def train_3d(args, data_loader, run_dir, writer=None):
 
     if 'cluster' in args.model:
         # Generate colors for cluster masks
@@ -70,7 +63,7 @@ def train_3d(args, data_loader, run_dir, out_channel=3, writer=None):
         model = PCRLv23d(skip_conn=args.skip_conn)
     elif 'cluster' in args.model:
         multi_scale = True if 'ms' in args.model else False
-        model = Cluster3d(n_clusters=args.k, multi_scale=multi_scale)
+        model = Cluster3d(n_clusters=args.k, multi_scale=multi_scale, seed=args.seed)
     if not args.cpu:
         model = model.cuda()
 
@@ -79,8 +72,6 @@ def train_3d(args, data_loader, run_dir, out_channel=3, writer=None):
                                 lr=args.lr,
                                 momentum=args.momentum,
                                 weight_decay=args.weight_decay)
-    if args.amp:
-        model, optimizer = amp.initialize(model, optimizer, opt_level='O1')
     model = nn.DataParallel(model)
 
     criterion = nn.MSELoss()
@@ -115,44 +106,44 @@ def train_3d(args, data_loader, run_dir, out_channel=3, writer=None):
 
         # VALIDATION (only for clustering task, just for visualization purposes)
 
-        n_epochs = min(10,args.epochs+1) # The number of epochs to sample for the grid (10 or all epochs if total less than 10) (+1 because we always run for one extra epoch)
+        # n_epochs = min(10,args.epochs+1) # The number of epochs to sample for the grid (10 or all epochs if total less than 10) (+1 because we always run for one extra epoch)
         
-        if args.vis and ((epoch % ((args.epochs + 1) // (n_epochs - 2))) == 0 or epoch==args.epochs) and 'cluster' in args.model and args.n == 'brats': 
-            # TODO: Currently only works for BraTS Clustering
-            # The n_epochs - 2 is because we want to sample one less so that we can always add the final epoch in the end regardless of the step, and one less because epoch 0 is always included
+        # if args.vis and ((epoch % ((args.epochs + 1) // (n_epochs - 2))) == 0 or epoch==args.epochs) and 'cluster' in args.model and args.n == 'brats': 
+        #     # TODO: Currently only works for BraTS Clustering
+        #     # The n_epochs - 2 is because we want to sample one less so that we can always add the final epoch in the end regardless of the step, and one less because epoch 0 is always included
 
-            print("==> validating...")
+        #     print("==> validating...")
             
-            # Validate
-            row_pred_all = val_cluster_inner(args, epoch, val_loader, model, colors)  # Array of a row for each scale to add to the grid of each scale
+        #     # Validate
+        #     row_pred_all = val_cluster_inner(args, epoch, val_loader, model, colors)  # Array of a row for each scale to add to the grid of each scale
             
-            # Add row to corresponding grid for each scale
-            if len(grid_pred_all) == 0:
-                grid_pred_all = row_pred_all
-            else:
-                for i in range(len(row_pred_all)):
-                    grid_pred_all[i].extend(row_pred_all[i])
+        #     # Add row to corresponding grid for each scale
+        #     if len(grid_pred_all) == 0:
+        #         grid_pred_all = row_pred_all
+        #     else:
+        #         for i in range(len(row_pred_all)):
+        #             grid_pred_all[i].extend(row_pred_all[i])
             
-            n_scales = len(grid_pred_all)
-            n_cols = min(10,args.b)
-            n_rows = len(grid_pred_all[0]) // n_cols
+        #     n_scales = len(grid_pred_all)
+        #     n_cols = min(10,args.b)
+        #     n_rows = len(grid_pred_all[0]) // n_cols
             
-            # Plot for every scale its grid of predictions for sampled epochs up to now
-            for sc in range(n_scales):
-                fig, axes = plt.subplots(n_rows, n_cols, figsize=(15, 15*(n_rows/n_cols)))
-                for i, ax in enumerate(axes.flat):
-                    ax.imshow(grid_pred_all[sc][i]) 
-                    ax.axis('off')  # Turn off axis labels
-                    if i % n_cols:
-                        ax.set_ylabel(f'Epoch {epoch}', rotation=0, size='large')
-                plt.tight_layout()  # Adjust spacing between subplots
-                # Save grid to buffer and then log on tensorboard
-                buf = io.BytesIO()
-                plt.savefig(buf, format='png', bbox_inches='tight', dpi=100)
-                buf.seek(0)
-                grid = PIL.Image.open(buf)
-                grid = t.pil_to_tensor(grid)
-                writer.add_image(f'img/val/grid_{sc}', img_tensor=grid, global_step=epoch)
+        #     # Plot for every scale its grid of predictions for sampled epochs up to now
+        #     for sc in range(n_scales):
+        #         fig, axes = plt.subplots(n_rows, n_cols, figsize=(15, 15*(n_rows/n_cols)))
+        #         for i, ax in enumerate(axes.flat):
+        #             ax.imshow(grid_pred_all[sc][i]) 
+        #             ax.axis('off')  # Turn off axis labels
+        #             if i % n_cols:
+        #                 ax.set_ylabel(f'Epoch {epoch}', rotation=0, size='large')
+        #         plt.tight_layout()  # Adjust spacing between subplots
+        #         # Save grid to buffer and then log on tensorboard
+        #         buf = io.BytesIO()
+        #         plt.savefig(buf, format='png', bbox_inches='tight', dpi=100)
+        #         buf.seek(0)
+        #         grid = PIL.Image.open(buf)
+        #         grid = t.pil_to_tensor(grid)
+        #         writer.add_image(f'img/val/grid_{sc}', img_tensor=grid, global_step=epoch)
 
         # Save model
         if epoch % 100 == 0 or epoch == 240:
@@ -230,11 +221,7 @@ def train_pcrlv2_inner(args, epoch, train_loader, model, optimizer, criterion, c
             print('skip the step')
             continue
         optimizer.zero_grad()
-        if args.amp:
-            with amp.scale_loss(loss, optimizer) as scaled_loss:
-                scaled_loss.backward()
-        else:
-            loss.backward()
+        loss.backward()
         optimizer.step()
 
         # Meters
@@ -298,77 +285,53 @@ def train_cluster_inner(args, epoch, train_loader, model, optimizer, criterion, 
             crop1_coords = crop1_coords.cuda()
             crop2_coords = crop2_coords.cuda()
 
-        # Get embeddings and predictions for all scales
-        emb1_all, pred1_all = model(x1)
-        emb2_all, pred2_all = model(x2)
+        # STUDENT CLUSTER ASSIGNMENT ------------------------------------
+
+        # Get cluster predictions from student U-Net
+        pred1 = model.module(x1)
+        pred2 = model.module(x2)
         
-        ## SwAV Loss
-        n_scales = len(emb1_all)
-        if n_scales > 1:
-            sc = random.randint(0,n_scales-1)
-        else:
-            sc = 0
-    
-        emb1 = emb1_all[sc]
-        emb2 = emb2_all[sc]
-        pred1 = pred1_all[sc]
-        pred2 = pred2_all[sc]
-
-
-        # Normalize D dimension (BxNxD)
-        emb1 = nn.functional.normalize(emb1, dim=2, p=2)  
-        emb2 = nn.functional.normalize(emb2, dim=2, p=2) 
-
-        # Get ground truths (teacher predictions)
-        with torch.no_grad():
-            # Get prototypes and normalize
-            proto = model.module.prototypes.weight.data.clone()
-            proto = nn.functional.normalize(proto, dim=1, p=2)  # Normalize D dimension (KxD)
-
-            # Embedding to prototype similarity matrix
-            cos_sim1 = torch.matmul(emb1, proto.t())  # BxNxK
-            cos_sim2 = torch.matmul(emb2, proto.t())
-
-            N = model.module.patch_num[sc]
-            PH, PW, PD = model.module.patch_dim[sc]
-            K = model.module.proto_num
-
-            # Flatten batch and patch num dimensions of similarity matrices (BxNxK -> B*NxK), and transpose matrices (KxB*N) for sinkhorn algorithm
-            flat_cos_sim1 = cos_sim1.reshape(B*N,K).T
-            flat_cos_sim2 = cos_sim2.reshape(B*N,K).T
-
-            # Standardize for numerical stability (maybe?)
-            eps = 0.05
-            flat_cos_sim1 = torch.exp(flat_cos_sim1 / eps)
-            flat_cos_sim2 = torch.exp(flat_cos_sim2 / eps)
-
-            # Teacher cluster assignments
-            gt1 = sinkhorn(args, Q=flat_cos_sim1, nmb_iters=3).T.reshape((B,N,K))  # Also restore patch num dimension
-            gt2 = sinkhorn(args, Q=flat_cos_sim2, nmb_iters=3).T.reshape((B,N,K))
-
-            # Apply temperature
-            temp = 1
-            gt1 = gt1 / temp
-            gt2 = gt2 / temp
-
         # Convert to probabilities
         pred1 = pred1.softmax(2)
         pred2 = pred2.softmax(2)
 
-        # Convert prediction and ground truth to (soft) cluster masks (restore spatial position of pooled image)
-        NPH = H//PH  # Num patches at X
-        NPW = W//PW  # Num patches at Y
-        NPD = D//PD  # Num patches at Z
-        pred1 = pred1.permute(0,2,1).reshape((B,K,NPH,NPW,NPD))
-        pred2 = pred2.permute(0,2,1).reshape((B,K,NPH,NPW,NPD))
-        gt1 = gt1.permute(0,2,1).reshape((B,K,NPH,NPW,NPD))
-        gt2 = gt2.permute(0,2,1).reshape((B,K,NPH,NPW,NPD))
+        # TEACHER CLUSTER ASSIGNMENT ------------------------------------
+
+        # Get upsampled features from teacher DINO ViT16 encoder
+        with torch.no_grad():
+            B, C, H, W, D = x1.shape
+            feat1 = model.module.featup_upsampler(x1.permute(0,4,1,2,3).reshape(B*D,C,H,W).repeat(1,3,1,1))  # B x 1 x H x W x D -> B*D x 3 x H x W -> B*D x C' x H' x W'
+            feat2 = model.module.featup_upsampler(x2.permute(0,4,1,2,3).reshape(B*D,C,H,W).repeat(1,3,1,1))
+            
+            # Flatten spatial dimensions to get feature vectors for each pixel
+            feat_vec1 = feat1.permute(0,2,3,1).flatten(0,2)  # B*D x C' x H x W -> B*D*H*W x C'
+            feat_vec2 = feat2.permute(0,2,3,1).flatten(0,2) 
+
+            # Perform K-Means on teacher feature vectors
+            K = model.module.kmeans.n_clusters
+            # gt_vec1 = model.module.kmeans.fit_predict(x=feat_vec1.unsqueeze(0))
+            # gt_vec2 = model.module.kmeans.fit_predict(x=feat_vec2.unsqueeze(0))
+            model.module.kmeans = model.module.kmeans.fit(torch.cat([feat_vec1,feat_vec2]).detach().cpu().numpy())
+            gt_vec = torch.from_numpy(model.module.kmeans.predict(torch.cat([feat_vec1,feat_vec2]).detach().cpu().numpy()))
+            gt_vec1 = gt_vec[:gt_vec.shape[0]//2]
+            gt_vec2 = gt_vec[gt_vec.shape[0]//2:]
+
+            if not args.cpu:
+                gt_vec1 = gt_vec1.cuda()
+                gt_vec2 = gt_vec2.cuda()
+    
+            # Convert to one-hot encoding and restore spatial dimensions
+            gt1 = f.one_hot(gt_vec1.to(torch.int64), K).reshape(B, D, H, W, K).permute(0,4,2,3,1)  # B*D*H*W x K -> B x D x H x W x K -> B x K x H x W x D
+            gt2 = f.one_hot(gt_vec2.to(torch.int64), K).reshape(B, D, H, W, K).permute(0,4,2,3,1)
+
+        # --------------------------------------------------------------
+
 
         # ROI-align crop intersection with cluster assignment intersection
-        pred1, pred2, gt1, gt2 = roi_align_intersect(pred1, pred2, gt1, gt2, crop1_coords, crop2_coords)
+        roi_pred1, roi_pred2, roi_gt1, roi_gt2 = roi_align_intersect(pred1, pred2, gt1, gt2, crop1_coords, crop2_coords)
 
         # SwAV Loss for current scale
-        scale_swav_loss = swav_loss(gt1, gt2, pred1, pred2)
+        scale_swav_loss = swav_loss(roi_gt1, roi_gt2, roi_pred1, roi_pred2)
 
         # Plot predictions on tensorboard
         with torch.no_grad():
@@ -378,7 +341,6 @@ def train_cluster_inner(args, epoch, train_loader, model, optimizer, criterion, 
                 # Select 2D images
                 img_idx = 0
                 m_idx = 0
-                c_idx = 0
                 s_idx = D//2
                 in1 = x1[img_idx,m_idx,:,:,s_idx].unsqueeze(0)
                 in2 = x2[img_idx,m_idx,:,:,s_idx].unsqueeze(0)
@@ -434,8 +396,8 @@ def train_cluster_inner(args, epoch, train_loader, model, optimizer, criterion, 
                 gt_img = torch.cat((gt1,gt2),dim=3).squeeze(0).cpu().detach().numpy()
 
                 in_img_name = 'img/train/raw' 
-                pred_img_name = f'img/train/pred_{sc}'
-                gt_img_name = f'img/train/gt_{sc}'
+                pred_img_name = f'img/train/pred'
+                gt_img_name = f'img/train/gt'
 
                 writer.add_image(in_img_name, img_tensor=in_img, global_step=epoch, dataformats='CHW')
                 writer.add_image(pred_img_name, img_tensor=pred_img, global_step=epoch, dataformats='CHW')   
@@ -456,12 +418,7 @@ def train_cluster_inner(args, epoch, train_loader, model, optimizer, criterion, 
             print('skip the step')
             continue
         optimizer.zero_grad()
-        if args.amp:
-            with amp.scale_loss(loss, optimizer) as scaled_loss:
-                scaled_loss.backward()
-        else:
-            loss.backward()
-
+        loss.backward()
         optimizer.step()
 
         # Meters

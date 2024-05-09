@@ -8,7 +8,6 @@ from segmentation_models_pytorch.base.initialization import initialize_decoder, 
 from sklearn.cluster import KMeans
 
 
-
 model_urls = {
     'resnet18': 'https://download.pytorch.org/models/resnet18-5c106cde.pth',
     'resnet34': 'https://download.pytorch.org/models/resnet34-333f7ec4.pth',
@@ -216,7 +215,7 @@ class PCRLv2(nn.Module):
 
 
 class Cluster(nn.Module):
-    def __init__(self, in_channels=1, n_clusters=50, low_dim=128, encoder_weights=None, seed=1):
+    def __init__(self, in_channels=1, n_clusters=50, encoder_weights=None, seed=1):
         super(Cluster, self).__init__()
         self.model = smp.Unet('resnet18', in_channels=in_channels, classes=n_clusters, encoder_weights=encoder_weights)
         self.model.decoder = PCRLv2Decoder(self.model.encoder.out_channels)

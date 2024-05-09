@@ -1,6 +1,7 @@
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
+from sklearn.cluster import KMeans
 
 
 class LUConv(nn.Module):
@@ -119,9 +120,7 @@ class DownTransition(nn.Module):
 
 
 class PCRLv23d(nn.Module):
-    # the number of convolutions in each layer corresponds
-    # to what is in the actual prototxt, not the intent
-    def __init__(self, n_class=1, act='relu', norm='bn', in_channels=1, low_dim=128, student=False, skip_conn=False):
+    def __init__(self, n_class=1, act='relu', norm='bn', in_channels=1, skip_conn=False):
         super(PCRLv23d, self).__init__()
         self.maxpool = nn.MaxPool3d(2)
         self.down_tr64 = DownTransition(in_channels, 0, act, norm)
@@ -137,11 +136,14 @@ class PCRLv23d(nn.Module):
         self.skip_conn=skip_conn
 
     def forward(self, x, local=False):
-        b = x.shape[0]
+
+        # Encoder
         self.skip_out64 = self.down_tr64(x)
         self.skip_out128 = self.down_tr128(self.maxpool(self.skip_out64))
         self.skip_out256 = self.down_tr256(self.maxpool(self.skip_out128))
         self.out512 = self.down_tr512(self.maxpool(self.skip_out256))
+
+        # Decoder
         middle_masks = []
         middle_features = []
         if self.skip_conn:
@@ -156,7 +158,6 @@ class PCRLv23d(nn.Module):
             out_up_64, pro_64, pre_64, middle_masks_64 = self.up_tr64(out_up_128, skip_x=self.skip_out64)
         else:
             out_up_64, pro_64, pre_64, middle_masks_64 = self.up_tr64(out_up_128)
-
         if not local:
             middle_masks.append(F.interpolate(middle_masks_256, scale_factor=4, mode='trilinear'))
             middle_masks.append(F.interpolate(middle_masks_128, scale_factor=2, mode='trilinear'))
@@ -164,65 +165,69 @@ class PCRLv23d(nn.Module):
         middle_features.append([pro_256, pre_256])
         middle_features.append([pro_128, pre_128])
         middle_features.append([pro_64, pre_64])
-        # normal decoder
+        
+        # Output Layer
         out = self.out_tr(out_up_64)
 
         return out, middle_features, middle_masks
 
 
 class Cluster3d(nn.Module):
-    def __init__(self, n_clusters=10, act='relu', norm='bn', in_channels=1, multi_scale = False):
-        super(Cluster3d, self).__init__()
-
-        self.multi_scale = multi_scale
-        if self.multi_scale: 
-            self.scales = [8, 64, 512, 4096]  # Feature scales
-            self.patch_num = self.scales  # Clustering scales (Number of patches N)
-            self.patch_dim = [(32,32,16),(16,16,8),(8,8,4),(4,4,2)]  # Patch dims P1 x P2 x P3 for each clustering scale
-        else:
-            self.scales = [64, 128, 256, 512]
-            self.patch_num = [512]  # Clustering only for last scale
-            self.patch_dim = [(8,8,4)]
-
+    def __init__(self, in_channels=1, n_clusters=50, act='relu', norm='bn', skip_conn=False, seed=1):
+        super(PCRLv23d, self).__init__()
         self.maxpool = nn.MaxPool3d(2)
-        self.down_tr = nn.ModuleList([DownTransition(scale, i, act, norm, multi_scale=self.multi_scale) for i, scale in enumerate([in_channels,] + self.scales[:-1])])  # Down transition for each scale
+        self.down_tr64 = DownTransition(in_channels, 0, act, norm)
+        self.down_tr128 = DownTransition(64, 1, act, norm)
+        self.down_tr256 = DownTransition(128, 2, act, norm)
+        self.down_tr512 = DownTransition(256, 3, act, norm)
         self.avg_pool = nn.AdaptiveAvgPool3d((1, 1, 1))
+        self.up_tr256 = UpTransition(512, 512, 2, act, norm, skip_conn=skip_conn)
+        self.up_tr128 = UpTransition(256, 256, 1, act, norm, skip_conn=skip_conn)
+        self.up_tr64 = UpTransition(128, 128, 0, act, norm, skip_conn=skip_conn)
+        self.out_tr = OutputTransition(64, n_clusters)
         self.sigmoid = nn.Sigmoid()
-
-        # Clustering Pretask Head
-        self.emb_dim = 64  # D
-        self.proto_num = n_clusters  # K
-        self.cluster_projection_head = nn.ModuleList([nn.Linear(self.patch_dim[i][0]*self.patch_dim[i][1]*self.patch_dim[i][2], self.emb_dim) for i in range(len(self.patch_dim))])  # Projection head for each scale
-        self.prototypes = nn.Linear(self.emb_dim, self.proto_num, bias=False)  # Prototypes 
-
-    def forward(self, x, local=False):
-
-        # Forward down transitions at every scale
-        out_down0 = self.maxpool(self.down_tr[0](x))
-        out_down1  = self.maxpool(self.down_tr[1](out_down0))
-        out_down2  = self.maxpool(self.down_tr[2](out_down1))
-        if self.multi_scale:
-            out_down3  = self.maxpool(self.down_tr[3](out_down2)) # Careful with the maxpool at this scale, because SegmentationModel doesn't have it normally
+        if torch.cuda.is_available():
+            self.featup_upsampler = torch.hub.load("mhamilton723/FeatUp", 'dino16', use_norm=False)
         else:
-            out_down3 = self.down_tr[3](out_down2)
+            self.featup_upsampler = torch.hub.load("mhamilton723/FeatUp", 'dino16', use_norm=False, pretrained=False)
+            model_dict = self.featup_upsampler.state_dict()
+            upsampler_dict = torch.hub.load_state_dict_from_url('https://marhamilresearch4.blob.core.windows.net/feature-upsampling-public/pretrained/dino16_jbu_stack_cocostuff.ckpt', map_location="cpu")['state_dict']
+            encoder_dict = torch.hub.load_state_dict_from_url('https://dl.fbaipublicfiles.com/dino/dino_deitsmall16_pretrain/dino_deitsmall16_pretrain.pth', map_location="cpu")
+            for k, v in encoder_dict.items():
+                model_dict['model.model.' + k] = v
+            for k, v in upsampler_dict.items():
+                model_dict[k] = v
+            self.featup_upsampler.load_state_dict(model_dict)
+        # self.kmeans = KMeans(n_clusters=n_clusters, seed=seed)
+        self.kmeans = KMeans(n_clusters=n_clusters, random_state=seed)
+        self.skip_conn=skip_conn
 
-        # Get feature maps for every clustering scale
-        if self.multi_scale:
-            feat = [out_down0,out_down1,out_down2,out_down3]
+    def forward(self, x):
+
+        # Encoder
+        self.skip_out64 = self.down_tr64(x)
+        self.skip_out128 = self.down_tr128(self.maxpool(self.skip_out64))
+        self.skip_out256 = self.down_tr256(self.maxpool(self.skip_out128))
+        self.out512 = self.down_tr512(self.maxpool(self.skip_out256))
+
+        # Decoder
+        if self.skip_conn:
+            out_up_256, _, _, _ = self.up_tr256(self.out512, skip_x=self.skip_out256)
         else:
-            feat = [out_down3]
+            out_up_256, _, _, _ = self.up_tr256(self.out512)
+        if self.skip_conn:
+            out_up_128, _, _, _ = self.up_tr128(out_up_256, skip_x=self.skip_out128)
+        else:
+            out_up_128, _, _, _ = self.up_tr128(out_up_256)
+        if self.skip_conn:
+            out_up_64, _, _, _ = self.up_tr64(out_up_128, skip_x=self.skip_out64)
+        else:
+            out_up_64, _, _, _ = self.up_tr64(out_up_128)
 
-        # Flatten spatial dims P1,P2,P3 of feature maps (B x N x P1 x P2 x P3) at every scale
-        flat_feat = [f.flatten(start_dim=2,end_dim=4) for f in feat]
+        # Output Layer
+        out = self.out_tr(out_up_64)
 
-        # Get embeddings and output preds at every scale
-        emb = []
-        out = []
-        for i in range(len(flat_feat)):
-            emb.append(self.cluster_projection_head[i](flat_feat[i]))
-            out.append(self.prototypes(emb[i]))
-
-        return emb, out
+        return out
 
 
 class TraceWrapper(torch.nn.Module):
@@ -237,16 +242,11 @@ class TraceWrapper(torch.nn.Module):
 
 
 class SegmentationModel(nn.Module):
-    # the number of convolutions in each layer corresponds
-    # to what is in the actual prototxt, not the intent
-    def __init__(self, n_class=1, act='relu', norm='bn', in_channels=1, low_dim=128, student=False, skip_conn=False, multi_scale=False):
+    def __init__(self, n_class=1, act='relu', norm='bn', in_channels=1, skip_conn=False, multi_scale=False):
         super(SegmentationModel, self).__init__()
         
-        self.multi_scale = multi_scale  #  For multi-scale clustering model
-        if self.multi_scale:
-            self.scales = [8, 64, 512, 4096]  # Feature Scales
-        else:
-            self.scales = [64, 128, 218, 512] 
+        self.multi_scale = multi_scale  #  TODO: For multi-scale clustering model
+        self.scales = [64, 128, 218, 512] 
         self.maxpool = nn.MaxPool3d(2)
         self.down_tr = nn.ModuleList([DownTransition(scale, i, act, norm, multi_scale=self.multi_scale) for i, scale in enumerate([in_channels,] + self.scales[:-1])])
         self.avg_pool = nn.AdaptiveAvgPool3d((1, 1, 1))

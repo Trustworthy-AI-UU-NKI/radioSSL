@@ -219,7 +219,7 @@ class Cluster(nn.Module):
         super(Cluster, self).__init__()
         self.model = smp.Unet('resnet18', in_channels=in_channels, classes=n_clusters, encoder_weights=encoder_weights)
         self.model.decoder = PCRLv2Decoder(self.model.encoder.out_channels)
-        self.featup_upsampler = torch.hub.load("mhamilton723/FeatUp", 'dinov2', use_norm=False)
+        self.featup_upsampler = torch.hub.load("mhamilton723/FeatUp", 'dino16', use_norm=False)
         # self.kmeans = KMeans(n_clusters=n_clusters, seed=seed)
         self.kmeans = KMeans(n_clusters=n_clusters, random_state=seed)
 

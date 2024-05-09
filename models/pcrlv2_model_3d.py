@@ -186,7 +186,7 @@ class Cluster3d(nn.Module):
         self.up_tr64 = UpTransition(128, 128, 0, act, norm, skip_conn=skip_conn)
         self.out_tr = OutputTransition(64, n_clusters)
         self.sigmoid = nn.Sigmoid()
-        self.featup_upsampler = torch.hub.load("mhamilton723/FeatUp", 'dinov2', use_norm=False)
+        self.featup_upsampler = torch.hub.load("mhamilton723/FeatUp", 'dino16', use_norm=False)
         # self.kmeans = KMeans(n_clusters=n_clusters, seed=seed)
         self.kmeans = KMeans(n_clusters=n_clusters, random_state=seed)
         self.skip_conn=skip_conn

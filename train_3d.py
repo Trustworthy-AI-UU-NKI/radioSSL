@@ -304,12 +304,15 @@ def train_cluster_inner(args, epoch, train_loader, model, optimizer, scaler, wri
             # TEACHER CLUSTER ASSIGNMENT ------------------------------------
 
             with torch.no_grad():
-                # Get upsampled features from teacher DINO ViT16 encoder
-                B, C, H, W, D = x1.shape
-                #  B x 1 x H x W x D -> B*D x 1 x H x W ->  B*D x 3 x H x W -> B*D x C' x H x W -> B*D*H*W x C' 
-                feat_vec1 = model.module.featup_upsampler(x1.permute(0,4,1,2,3).reshape(B*D,C,H,W).repeat(1,3,1,1)).permute(0,2,3,1).flatten(0,2)
-                feat_vec2 = model.module.featup_upsampler(x2.permute(0,4,1,2,3).reshape(B*D,C,H,W).repeat(1,3,1,1)).permute(0,2,3,1).flatten(0,2) 
-
+                # Get upsampled features from teacher DINO ViT16 encoder and flatten spatial dimensions to get feature vectors for each pixel
+                feat_vec1 = []
+                feat_vec2 = []
+                for i in range(B):  # For cuda memory efficiency, enter only 1 batch at a time (we have a lot)
+                    #  B x 1 x H x W x D -(Flatten slices)-> B*D x 1 x H x W -(RGB)->  B*D x 3 x H x W -(FeatUp)-> B*D x C' x H x W -(Vectorize)-> B*D*H*W x C' 
+                    feat_vec1 = model.module.featup_upsampler(x1[i].unsqueeze(0).repeat(1,3,1,1)).permute(0,2,3,1).flatten(0,2)  
+                    feat_vec2 = model.module.featup_upsampler(x2[i].unsqueeze(0).repeat(1,3,1,1)).permute(0,2,3,1).flatten(0,2) 
+                feat_vec1 = torch.cat(feat_vec1)
+                
                 # Perform K-Means on teacher feature vectors
                 K = model.module.kmeans.n_clusters
                 # gt_vec1 = model.module.kmeans.fit_predict(x=feat_vec1.unsqueeze(0))

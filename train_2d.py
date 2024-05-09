@@ -15,14 +15,6 @@ from tools import adjust_learning_rate, AverageMeter, swav_loss, roi_align_inter
 from models import PCRLv2, Cluster
 
 
-try:
-    from apex import amp, optimizers
-except ImportError:
-    pass
-
-
-# from koila import LazyTensor, lazy
-
 def Normalize(x):
     norm_x = x.pow(2).sum(1, keepdim=True).pow(1. / 2.)
     x = x.div(norm_x)
@@ -302,31 +294,26 @@ def train_cluster_inner(args, epoch, train_loader, model, optimizer, criterion, 
 
         # TEACHER CLUSTER ASSIGNMENT ------------------------------------
 
-        # Get upsampled features from teacher DINO ViT16 encoder
         with torch.no_grad():
-            feat1 = model.module.featup_upsampler(x1.repeat(1,3,1,1))  # Requires 3 channels
-            feat2 = model.module.featup_upsampler(x2.repeat(1,3,1,1))
-            
-            # Flatten spatial dimensions to get feature vectors for each pixel
-            feat_vec1 = feat1.permute(0,2,3,1).flatten(0,2)  # B*D x C' x H x W -> B*D*H*W x C'
-            feat_vec2 = feat2.permute(0,2,3,1).flatten(0,2) 
+            # Get upsampled features from teacher DINO ViT16 encoder and flatten spatial dimensions to get feature vectors for each pixel
+            #  B*D x 1 x H x W ->  B*D x 3 x H x W -> B*D x C' x H x W -> B*D*H*W x C' 
+            feat_vec1 = model.module.featup_upsampler(x1.repeat(1,3,1,1)).permute(0,2,3,1).flatten(0,2)  
+            feat_vec2 = model.module.featup_upsampler(x2.repeat(1,3,1,1)).permute(0,2,3,1).flatten(0,2) 
 
             # Perform K-Means on teacher feature vectors
             K = model.module.kmeans.n_clusters
             # gt_vec1 = model.module.kmeans.fit_predict(x=feat_vec1.unsqueeze(0))
             # gt_vec2 = model.module.kmeans.fit_predict(x=feat_vec2.unsqueeze(0))
             model.module.kmeans = model.module.kmeans.fit(torch.cat([feat_vec1,feat_vec2]).detach().cpu().numpy())
-            gt_vec = torch.from_numpy(model.module.kmeans.predict(torch.cat([feat_vec1,feat_vec2]).detach().cpu().numpy()))
-            gt_vec1 = gt_vec[:gt_vec.shape[0]//2]
-            gt_vec2 = gt_vec[gt_vec.shape[0]//2:]
+            gt_vec = torch.from_numpy(model.module.kmeans.predict(torch.cat([feat_vec1,feat_vec2]).detach().cpu().numpy())).cuda().to(torch.int64)
 
             if not args.cpu:
                 gt_vec1 = gt_vec1.cuda()
                 gt_vec2 = gt_vec2.cuda()
     
             # Convert to one-hot encoding and restore spatial dimensions
-            gt1 = f.one_hot(gt_vec1.to(torch.int64), K).reshape(-1, H, W, K).permute(0,3,1,2)  # B*D*H*W x K -> B*D x H x W x K -> B*D x K x H x W
-            gt2 = f.one_hot(gt_vec2.to(torch.int64), K).reshape(-1, H, W, K).permute(0,3,1,2)
+            gt1 = f.one_hot(gt_vec[:gt_vec.shape[0]//2], K).reshape(-1, H, W, K).permute(0,3,1,2)  # B*D*H*W x K -> B*D x H x W x K -> B*D x K x H x W
+            gt2 = f.one_hot(gt_vec[gt_vec.shape[0]//2:], K).reshape(-1, H, W, K).permute(0,3,1,2)
 
         # --------------------------------------------------------------
 

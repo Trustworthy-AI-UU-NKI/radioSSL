@@ -227,6 +227,7 @@ def train_pcrlv2_inner(args, epoch, train_loader, model, optimizer, scaler, crit
         optimizer.zero_grad()
         scaler.scale(loss).backward()
         scaler.step(optimizer)
+        scaler.update()
 
         # Meters
         mg_loss_meter.update(loss1.item(), bsz)
@@ -426,6 +427,7 @@ def train_cluster_inner(args, epoch, train_loader, model, optimizer, scaler, wri
         optimizer.zero_grad()
         scaler.scale(loss).backward()
         scaler.step(optimizer)
+        scaler.update()
 
         # Meters
         mg_loss_meter.update(loss1.item(), B)

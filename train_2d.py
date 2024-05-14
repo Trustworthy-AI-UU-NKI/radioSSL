@@ -109,7 +109,7 @@ def train_2d(args, data_loader, run_dir, writer=None):
         # TRAINING
 
         adjust_learning_rate(epoch, args, optimizer)
-        print("==> training...")
+        print("==> Training...", flush=True)
 
         time1 = time.time()
         
@@ -119,7 +119,7 @@ def train_2d(args, data_loader, run_dir, writer=None):
             loss, prob, total_loss, writer = train_cluster_inner(args, epoch, train_loader, model, optimizer, scaler, writer, colors)
 
         time2 = time.time()
-        print('epoch {}, total time {:.2f}'.format(epoch, time2 - time1))
+        print('epoch {}, total time {:.2f}'.format(epoch, time2 - time1), flush=True)
         
         if args.tensorboard:
             writer.add_scalar('loss/train', total_loss, epoch)  # Write train loss on tensorboard
@@ -127,7 +127,7 @@ def train_2d(args, data_loader, run_dir, writer=None):
         # Save model
         if epoch % 100 == 0 or epoch == 240:
             # saving the model
-            print('==> Saving...')
+            print('==> Saving...', flush=True)
             state = {'opt': args, 'state_dict': model.module.model.state_dict(),
                      'optimizer': optimizer.state_dict(), 'epoch': epoch}
 
@@ -235,8 +235,7 @@ def train_pcrlv2_inner(args, epoch, train_loader, model, optimizer, scaler, crit
                   'mg loss {mg_loss.val:.3f} ({mg_loss.avg:.3f})\t'
                   'local loss {prob.val:.3f} ({prob.avg:.3f})'.format(
                 epoch, idx + 1, len(train_loader), batch_time=batch_time,
-                data_time=data_time, c2l_loss=loss_meter, mg_loss=mg_loss_meter, prob=prob_meter))
-            sys.stdout.flush()
+                data_time=data_time, c2l_loss=loss_meter, mg_loss=mg_loss_meter, prob=prob_meter), flush=True)
 
     return mg_loss_meter.avg, prob_meter.avg, total_loss_meter.avg, writer
 
@@ -251,7 +250,6 @@ def train_cluster_inner(args, epoch, train_loader, model, optimizer, scaler, wri
     """
 
     model.train()
-    model.module.featup.eval()
     batch_time = AverageMeter()
     data_time = AverageMeter()
     loss_meter = AverageMeter()
@@ -260,6 +258,7 @@ def train_cluster_inner(args, epoch, train_loader, model, optimizer, scaler, wri
     total_loss_meter = AverageMeter()
 
     end = time.time()
+    
     for idx, (input1, input2, _, _, crop1_coords, crop2_coords, _) in enumerate(train_loader):
         data_time.update(time.time() - end)
 
@@ -279,17 +278,11 @@ def train_cluster_inner(args, epoch, train_loader, model, optimizer, scaler, wri
         crop1_coords = torch.repeat_interleave(crop1_coords[:,:4],repeats=D,dim=0)  # Repeat crop window for each slice and ignore z dim of crop window
         crop2_coords = torch.repeat_interleave(crop2_coords[:,:4],repeats=D,dim=0)
 
-        # TODO: REMOVE LATER!
-        # x1 = x1[0:2]
-        # x2 = x2[0:2]
-        # crop1_coords = crop1_coords[0:2]
-        # crop2_coords = crop1_coords[0:2]
-
         device_type = 'cpu' if args.cpu else 'cuda'
         with autocast(device_type=device_type):  # Run in mixed-precision
 
             # STUDENT CLUSTER ASSIGNMENT ------------------------------------
-            print('Calculating student cluster assignments...')
+            print('Calculating student cluster assignments...', flush=True)
 
             # Get cluster predictions from student U-Net
             pred1 = model.module(x1)
@@ -300,17 +293,17 @@ def train_cluster_inner(args, epoch, train_loader, model, optimizer, scaler, wri
             pred2 = pred2.softmax(2)
 
             # TEACHER CLUSTER ASSIGNMENT ------------------------------------
-            print('Calculating teacher cluster assignments...')
+            print('Calculating teacher cluster assignments...', flush=True)
 
             with torch.no_grad():
-                print('     Calculating teacher feature vectors')
+                print('     Calculating teacher feature vectors', flush=True)
                 # Get upsampled features from teacher DINO ViT16 encoder and flatten spatial dimensions to get feature vectors for each pixel
                 feat_vec1 = model.module.featup(x1.repeat(1,3,1,1)).permute(0,2,3,1).flatten(0,2)
                 feat_vec2 = model.module.featup(x2.repeat(1,3,1,1)).permute(0,2,3,1).flatten(0,2)
 
 
                 # Perform K-Means on teacher feature vectors
-                print('     Performing K-Means...')
+                print('     Performing K-Means...', flush=True)
                 K = model.module.kmeans.n_clusters
                 # gt_vec1 = model.module.kmeans.fit_predict(x=feat_vec1.unsqueeze(0))
                 # gt_vec2 = model.module.kmeans.fit_predict(x=feat_vec2.unsqueeze(0))
@@ -431,8 +424,7 @@ def train_cluster_inner(args, epoch, train_loader, model, optimizer, scaler, wri
                   'mg loss {mg_loss.val:.3f} ({mg_loss.avg:.3f})\t'
                   'local loss {prob.val:.3f} ({prob.avg:.3f})'.format(
                 epoch, idx + 1, len(train_loader), batch_time=batch_time,
-                data_time=data_time, c2l_loss=loss_meter, mg_loss=mg_loss_meter, prob=prob_meter))
-            sys.stdout.flush()
+                data_time=data_time, c2l_loss=loss_meter, mg_loss=mg_loss_meter, prob=prob_meter), flush=True)
 
     return mg_loss_meter.avg, prob_meter.avg, total_loss_meter.avg, writer
 

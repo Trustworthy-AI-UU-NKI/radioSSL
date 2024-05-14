@@ -114,9 +114,9 @@ def train_2d(args, data_loader, run_dir, writer=None):
         time1 = time.time()
         
         if args.model == 'pcrlv2':
-            loss, prob, total_loss = train_pcrlv2_inner(args, epoch, train_loader, model, optimizer, scaler, criterion, cosine, writer)
+            loss, prob, total_loss, writer = train_pcrlv2_inner(args, epoch, train_loader, model, optimizer, scaler, criterion, cosine, writer)
         elif 'cluster' in args.model:
-            loss, prob, total_loss = train_cluster_inner(args, epoch, train_loader, model, optimizer, scaler, writer, colors)
+            loss, prob, total_loss, writer = train_cluster_inner(args, epoch, train_loader, model, optimizer, scaler, writer, colors)
 
         time2 = time.time()
         print('epoch {}, total time {:.2f}'.format(epoch, time2 - time1))
@@ -238,7 +238,7 @@ def train_pcrlv2_inner(args, epoch, train_loader, model, optimizer, scaler, crit
                 data_time=data_time, c2l_loss=loss_meter, mg_loss=mg_loss_meter, prob=prob_meter))
             sys.stdout.flush()
 
-    return mg_loss_meter.avg, prob_meter.avg, total_loss_meter.avg
+    return mg_loss_meter.avg, prob_meter.avg, total_loss_meter.avg, writer
 
 
 def train_pcrlv2_2d(args, data_loader, run_dir, writer=None):
@@ -289,6 +289,7 @@ def train_cluster_inner(args, epoch, train_loader, model, optimizer, scaler, wri
         with autocast(device_type=device_type):  # Run in mixed-precision
 
             # STUDENT CLUSTER ASSIGNMENT ------------------------------------
+            print('Calculating student cluster assignments...')
 
             # Get cluster predictions from student U-Net
             pred1 = model.module(x1)
@@ -299,24 +300,22 @@ def train_cluster_inner(args, epoch, train_loader, model, optimizer, scaler, wri
             pred2 = pred2.softmax(2)
 
             # TEACHER CLUSTER ASSIGNMENT ------------------------------------
+            print('Calculating teacher cluster assignments...')
 
             with torch.no_grad():
+                print('     Calculating teacher feature vectors')
                 # Get upsampled features from teacher DINO ViT16 encoder and flatten spatial dimensions to get feature vectors for each pixel
-                feat_vec1 = []
-                feat_vec2 = []
-                for i in range(B):  # For cuda memory efficiency, enter only 1 (actual) batch at a time (It's actually a batch with all the 2D slices from the 3D input)
-                    # B*D x 1 x H x W -(RGB)->  B*D x 3 x H x W -(FeatUp)-> B*D x C' x H x W -(Vectorize)-> B*D*H*W x C' 
-                    feat_vec1.append(model.module.featup(x1[i:i+D].repeat(1,3,1,1)).permute(0,2,3,1).flatten(0,2))
-                    feat_vec2.append(model.module.featup(x2[i:i+D].repeat(1,3,1,1)).permute(0,2,3,1).flatten(0,2))
-                feat_vec1 = torch.cat(feat_vec1)
-                feat_vec2 = torch.cat(feat_vec2)
+                feat_vec1 = model.module.featup(x1.repeat(1,3,1,1)).permute(0,2,3,1).flatten(0,2)
+                feat_vec2 = model.module.featup(x2.repeat(1,3,1,1)).permute(0,2,3,1).flatten(0,2)
+
 
                 # Perform K-Means on teacher feature vectors
+                print('     Performing K-Means...')
                 K = model.module.kmeans.n_clusters
                 # gt_vec1 = model.module.kmeans.fit_predict(x=feat_vec1.unsqueeze(0))
                 # gt_vec2 = model.module.kmeans.fit_predict(x=feat_vec2.unsqueeze(0))
-                model.module.kmeans = model.module.kmeans.fit(torch.cat([feat_vec1,feat_vec2]).detach().cpu().numpy())
-                gt_vec = torch.from_numpy(model.module.kmeans.predict(torch.cat([feat_vec1,feat_vec2]).detach().cpu().numpy())).cuda().to(torch.int64)
+                model.module.kmeans = model.module.kmeans.fit(torch.cat([feat_vec1,feat_vec2])[0:100].unsqueeze(0))
+                gt_vec = model.module.kmeans.predict(torch.cat([feat_vec1,feat_vec2]).unsqueeze(0)).to(torch.int64)
 
                 if not args.cpu:
                     gt_vec = gt_vec.cuda()
@@ -336,7 +335,7 @@ def train_cluster_inner(args, epoch, train_loader, model, optimizer, scaler, wri
         # Plot predictions on tensorboard
         with torch.no_grad():
             b_idx = 0
-            if args.vis and idx==b_idx: #and epoch % 10 == 0:
+            if args.vis and idx==b_idx and epoch % 10 == 0:
 
                 # Select images
                 img_idx = D//2 # TODO: D//2
@@ -393,9 +392,9 @@ def train_cluster_inner(args, epoch, train_loader, model, optimizer, scaler, wri
                 pred_img_name = f'img/train/pred'
                 gt_img_name = f'img/train/gt'
 
-                writer.add_image(in_img_name, img_tensor=in_img, global_step=epoch, dataformats='CHW')
-                writer.add_image(pred_img_name, img_tensor=pred_img, global_step=epoch, dataformats='CHW')   
-                writer.add_image(gt_img_name, img_tensor=gt_img, global_step=epoch, dataformats='CHW')
+                writer.add_image(in_img_name, img_tensor=in_img, global_step=epoch*len(train_loader)+idx, dataformats='CHW')
+                writer.add_image(pred_img_name, img_tensor=pred_img, global_step=epoch*len(train_loader)+idx, dataformats='CHW')   
+                writer.add_image(gt_img_name, img_tensor=gt_img, global_step=epoch*len(train_loader)+idx, dataformats='CHW')
 
         # TODO: add the other losses later
         loss1 = loss1 / D 
@@ -411,6 +410,7 @@ def train_cluster_inner(args, epoch, train_loader, model, optimizer, scaler, wri
         optimizer.zero_grad()
         scaler.scale(loss).backward()
         scaler.step(optimizer)
+        scaler.update()
 
         # Meters
         mg_loss_meter.update(loss1.item(), B)
@@ -434,7 +434,7 @@ def train_cluster_inner(args, epoch, train_loader, model, optimizer, scaler, wri
                 data_time=data_time, c2l_loss=loss_meter, mg_loss=mg_loss_meter, prob=prob_meter))
             sys.stdout.flush()
 
-    return mg_loss_meter.avg, prob_meter.avg, total_loss_meter.avg
+    return mg_loss_meter.avg, prob_meter.avg, total_loss_meter.avg, writer
 
 
 def train_cluster_2d(args, data_loader, run_dir, writer=None):

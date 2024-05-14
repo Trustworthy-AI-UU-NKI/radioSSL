@@ -4,8 +4,8 @@ import torch.nn as nn
 import torch.nn.functional as F
 from segmentation_models_pytorch.base import modules as md
 from segmentation_models_pytorch.base.initialization import initialize_decoder, initialize_head
-# from torch_kmeans import KMeans
-from sklearn.cluster import KMeans
+from torch_kmeans import KMeans
+# from sklearn.cluster import KMeans
 
 
 model_urls = {
@@ -220,8 +220,8 @@ class Cluster(nn.Module):
         self.model = smp.Unet('resnet18', in_channels=in_channels, classes=n_clusters, encoder_weights=encoder_weights)
         self.model.decoder = PCRLv2Decoder(self.model.encoder.out_channels)
         self.featup = torch.hub.load("mhamilton723/FeatUp", 'dino16', use_norm=False)
-        # self.kmeans = KMeans(n_clusters=n_clusters, seed=seed)
-        self.kmeans = KMeans(n_clusters=n_clusters, random_state=seed)
+        self.kmeans = KMeans(n_clusters=n_clusters, seed=seed)
+        # self.kmeans = KMeans(n_clusters=n_clusters, random_state=seed)
 
     def forward(self, x):
         features = self.model.encoder(x)

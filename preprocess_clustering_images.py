@@ -110,10 +110,9 @@ config = setup_config(input_rows=options.input_rows,
                       )
 config.display()
 
-col_size = [(160, 160, 64), (192, 192, 64), (128, 128, 64)]
-col_size_z_align = [(160, 160, 64), (192, 192, 64), (128, 128, 64)]  # If z_align then the slice dim must always be the same size 
-input_rows, input_cols, input_depth = (128, 128, 64)
-
+col_size = [(160, 160, 32), (192, 192, 32), (128, 128, 32)]
+col_size_z_align = [(160, 160, 32), (192, 192, 32), (128, 128, 32)]  # If z_align then the slice dim must always be the same size 
+input_rows, input_cols, input_depth = (128, 128, 32)
 
 def load_sitk_with_resample(img_path):
     outsize = [0, 0, 0]
@@ -214,7 +213,7 @@ def crop_pair(img_array, z_align = False):
             crop_coords1 = (start_x1, start_x1 + crop_rows1, start_y1, start_y1 + crop_cols1, start_z1, start_z1 + crop_deps1)
             crop_coords2 = (start_x2, start_x2 + crop_rows2, start_y2, start_y2 + crop_cols2, start_z2, start_z2 + crop_deps2)
             iou = cal_iou(crop_coords1, crop_coords2)
-            if iou > 0.7:
+            if iou > 0.3:
                 break
 
         crop_window1 = img_array1[start_x1: start_x1 + crop_rows1,

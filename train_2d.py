@@ -102,7 +102,6 @@ def train_2d(args, data_loader, run_dir, writer=None):
     if not args.cpu:
         criterion = criterion.cuda()
         cosine = cosine.cuda()
-        cudnn.benchmark = True
 
     for epoch in range(0, args.epochs + 1):
 
@@ -155,7 +154,7 @@ def train_pcrlv2_inner(args, epoch, train_loader, model, optimizer, scaler, crit
     total_loss_meter = AverageMeter()
 
     end = time.time()
-    for idx, (input1, input2, gt1, gt2, _, _, local_views) in enumerate(train_loader):
+    for idx, (input1, input2, gt1, gt2, _, _, local_views, _) in enumerate(train_loader):
         data_time.update(time.time() - end)
 
         x1 = input1.float()
@@ -259,7 +258,7 @@ def train_cluster_inner(args, epoch, train_loader, model, optimizer, scaler, wri
 
     end = time.time()
     
-    for idx, (input1, input2, _, _, crop1_coords, crop2_coords, _) in enumerate(train_loader):
+    for idx, (input1, input2, _, _, crop1_coords, crop2_coords, _, _) in enumerate(train_loader):
         data_time.update(time.time() - end)
 
         x1 = input1.float()
@@ -281,9 +280,6 @@ def train_cluster_inner(args, epoch, train_loader, model, optimizer, scaler, wri
         device_type = 'cpu' if args.cpu else 'cuda'
         with autocast(device_type=device_type):  # Run in mixed-precision
 
-            # STUDENT CLUSTER ASSIGNMENT ------------------------------------
-            print('Calculating student cluster assignments...', flush=True)
-
             # Get cluster predictions from student U-Net
             pred1 = model.module(x1)
             pred2 = model.module(x2)
@@ -291,33 +287,6 @@ def train_cluster_inner(args, epoch, train_loader, model, optimizer, scaler, wri
             # Convert to probabilities
             pred1 = pred1.softmax(2)
             pred2 = pred2.softmax(2)
-
-            # TEACHER CLUSTER ASSIGNMENT ------------------------------------
-            print('Calculating teacher cluster assignments...', flush=True)
-
-            with torch.no_grad():
-                print('     Calculating teacher feature vectors', flush=True)
-                # Get upsampled features from teacher DINO ViT16 encoder and flatten spatial dimensions to get feature vectors for each pixel
-                feat_vec1 = model.module.featup(x1.repeat(1,3,1,1)).permute(0,2,3,1).flatten(0,2)
-                feat_vec2 = model.module.featup(x2.repeat(1,3,1,1)).permute(0,2,3,1).flatten(0,2)
-
-
-                # Perform K-Means on teacher feature vectors
-                print('     Performing K-Means...', flush=True)
-                K = model.module.kmeans.n_clusters
-                # gt_vec1 = model.module.kmeans.fit_predict(x=feat_vec1.unsqueeze(0))
-                # gt_vec2 = model.module.kmeans.fit_predict(x=feat_vec2.unsqueeze(0))
-                model.module.kmeans = model.module.kmeans.fit(torch.cat([feat_vec1,feat_vec2])[0:100].unsqueeze(0))
-                gt_vec = model.module.kmeans.predict(torch.cat([feat_vec1,feat_vec2]).unsqueeze(0)).to(torch.int64)
-
-                if not args.cpu:
-                    gt_vec = gt_vec.cuda()
-
-                # Convert to one-hot encoding and restore spatial dimensions
-                gt1 = f.one_hot(gt_vec[:gt_vec.shape[0]//2], K).reshape(-1, H, W, K).permute(0,3,1,2)  # B*D*H*W x K -> B*D x H x W x K -> B*D x K x H x W
-                gt2 = f.one_hot(gt_vec[gt_vec.shape[0]//2:], K).reshape(-1, H, W, K).permute(0,3,1,2)
-
-            # --------------------------------------------------------------
 
         # ROI-align crop intersection with cluster assignment intersection
         roi_pred1, roi_pred2, roi_gt1, roi_gt2 = roi_align_intersect(pred1, pred2, gt1, gt2, crop1_coords, crop2_coords)

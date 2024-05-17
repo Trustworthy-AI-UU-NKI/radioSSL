@@ -15,7 +15,7 @@ from torch.nn import functional as f
 
 class LitsPretask(Dataset):
 
-    def __init__(self, config, img_train, train=False, transform=None, global_transforms=None, local_transforms=None):
+    def __init__(self, config, img_train, train=False, transform=None, global_transforms=None, local_transforms=None, load_gt=True):
         self.config = config
         self.imgs = img_train
         self.train = train
@@ -24,6 +24,7 @@ class LitsPretask(Dataset):
         self.local_input_enable = (config.model != 'cluster')  # Do not include local_views in dataloader for cluster_pretask (TODO: might change later)
         self.local_transforms = local_transforms if local_transforms != None else torchio.transforms.Compose([])
         self.norm = torchio.transforms.ZNormalization()
+        self.load_gt = load_gt
         if 'cluster' in config.model:
             self.coords = pd.read_csv(os.path.join(config.data,'crop_coords.csv'), names=['path','crop1','crop2'], index_col='path')  # coordinates of each pair of crops
         else:
@@ -33,6 +34,8 @@ class LitsPretask(Dataset):
         return len(self.imgs)
 
     def __getitem__(self, index):
+
+        # Load data
         image_path = self.imgs[index]
         relative_image_path = os.path.join(*os.path.normpath(image_path).split(os.sep)[-3:])
         pair = np.load(image_path)
@@ -41,6 +44,7 @@ class LitsPretask(Dataset):
         crop2 = pair[1]
         crop2 = np.expand_dims(crop2, axis=0)
         
+        # Crop coordinates
         crop1_coords = []
         crop2_coords = []
         if 'cluster' in self.config.model:
@@ -49,11 +53,27 @@ class LitsPretask(Dataset):
 
         input1 = self.transform(crop1)
         input2 = self.transform(crop2)
-        gt1 = copy.deepcopy(input1)
-        gt2 = copy.deepcopy(input2)
+
+        # Ground truth
+        if 'cluster' in self.config.model:
+            if self.load_gt:
+                name, ext = os.path.splitext(image_path)
+                gt_path = name + f"_gt_k{self.config.k}" + ext
+                gt_pair = np.load(image_path)
+                gt1 = gt_pair[0]
+                gt2 = gt_pair[1]
+            else:
+                gt1 = []
+                gt2 = []
+        elif self.config.model == 'pcrlv2':
+            gt1 = copy.deepcopy(input1)
+            gt2 = copy.deepcopy(input2)
+
+        # Global input
         input1 = self.global_transforms(input1)
         input2 = self.global_transforms(input2)
 
+        # Local input
         local_inputs = []
         if self.local_input_enable:
             locals = np.load(image_path.replace('global', 'local'))
@@ -66,7 +86,7 @@ class LitsPretask(Dataset):
 
         return torch.tensor(input1, dtype=torch.float), torch.tensor(input2, dtype=torch.float), \
             torch.tensor(gt1, dtype=torch.float), \
-            torch.tensor(gt2, dtype=torch.float), crop1_coords, crop2_coords, local_inputs
+            torch.tensor(gt2, dtype=torch.float), crop1_coords, crop2_coords, local_inputs, index
 
 class LitsFineTune(Dataset):
     def __init__(self, ct_dir, seg_dir, crop_size=(128, 128, 64), train=False, ratio=1.0):

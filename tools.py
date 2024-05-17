@@ -299,18 +299,18 @@ def get_luna_list(config, train_fold, valid_fold, test_fold, suffix, file_list):
     x_test = []
     for i in train_fold:
         for file in os.listdir(os.path.join(config.data, 'subset' + str(i))):
-            if suffix in file:
+            if suffix in file and 'gt' not in file:
                 if file_list is not None and file.split('_')[0] in file_list:
                     x_train.append(os.path.join(config.data, 'subset' + str(i), file))
                 elif file_list is None:
                     x_train.append(os.path.join(config.data, 'subset' + str(i), file))
     for i in valid_fold:
         for file in os.listdir(os.path.join(config.data, 'subset' + str(i))):
-            if suffix in file:
+            if suffix in file and 'gt' not in file:
                 x_valid.append(os.path.join(config.data, 'subset' + str(i), file))
     for i in test_fold:
         for file in os.listdir(os.path.join(config.data, 'subset' + str(i))):
-            if suffix in file:
+            if suffix in file and 'gt' not in file:
                 x_test.append(os.path.join(config.data, 'subset' + str(i), file))
     return x_train, x_valid, x_test
 
@@ -369,21 +369,21 @@ def get_brats_pretrain_list(data, ratio, suffix):
             line = line.strip('\n')
             train_patient_path = os.path.join(data, line)
             for file in os.listdir(train_patient_path):
-                if suffix in file:
+                if suffix in file and 'gt' not in file:
                     train_patients_list.append(os.path.join(train_patient_path, file))
     with open('./train_val_txt/brats_valid.txt', 'r') as f:
         for line in f:
             line = line.strip('\n')
             val_patient_path = os.path.join(data, line)
             for file in os.listdir(val_patient_path):
-                if suffix in file:
+                if suffix in file and 'gt' not in file:
                     val_patients_list.append(os.path.join(val_patient_path, file))
     with open('./train_val_txt/brats_test.txt', 'r') as f:
         for line in f:
             line = line.strip('\n')
             test_patient_path = os.path.join(data, line)
             for file in os.listdir(test_patient_path):
-                if suffix in file:
+                if suffix in file and 'gt' not in file:
                     test_patients_list.append(os.path.join(test_patient_path, file))
     train_patients_list = train_patients_list[: int(len(train_patients_list) * ratio)]
     print(
@@ -398,7 +398,7 @@ def get_luna_finetune_nodule(config, train_fold, valid_txt, test_txt, suffix, fi
     x_test = []
     for i in train_fold:
         for file in os.listdir(os.path.join(config.data, 'subset' + str(i))):
-            if suffix in file:
+            if suffix in file and 'gt' not in file:
                 if file_list is not None and file.split('_')[0] in file_list:
                     x_train.append(os.path.join(config.data, 'subset' + str(i), file))
                 elif file_list is None:
@@ -609,18 +609,7 @@ def sinkhorn(args, Q: torch.Tensor, nmb_iters: int) -> torch.Tensor:
 
 def roi_align_intersect(pred1, pred2, gt1, gt2, box1, box2):
     # Cluster assignments to align for crop 1 and crop 2: pred1, pred2, gt1, gt2
-    # Dimensions (H,W) or (H,W,Z) of input crop: crop_shape
     # Coordinates of the crop bounding box : box1, box2
-    # ATTENTION AT THE ORDER OF DIMS: box is [x1,x2,y1,y2] or [x1,x2,y1,y2,z1,z2], ibox is [y1,x1,y2.x2]
-
-    # Crop dimensions
-    H1 = box1[:,1] - box1[:,0]
-    W1 = box1[:,3] - box1[:,2]
-    H2 = box2[:,1] - box2[:,0]
-    W2 = box2[:,3] - box2[:,2]
-
-    # Pooled dimensions
-    B, K, NPH, NPW = pred1.shape[:4]
 
     # Convert to float
     pred1 = pred1.float()
@@ -630,62 +619,33 @@ def roi_align_intersect(pred1, pred2, gt1, gt2, box1, box2):
 
     # Calculate interesection box of the two crop bounding boxes
     x1 = torch.maximum(box1[:,0], box2[:,0])
-    y1 = torch.maximum(box1[:,2], box2[:,2])
     x2 = torch.minimum(box1[:,1], box2[:,1])
+    y1 = torch.maximum(box1[:,2], box2[:,2])
     y2 = torch.minimum(box1[:,3], box2[:,3])
+    z1 = torch.minimum(box1[:,4], box2[:,4])
+    z2 = torch.minimum(box1[:,5], box2[:,5])
 
-    # Coordinates of intersecting box inside bbox 1 (percentage coordinates)
-    # z-dim is ommited because the intersection is the same at z-axis (already aligned)
-    ibox1 = torch.stack([(y1-box1[:,2])/W1, (x1-box1[:,0])/H1, (y2-box1[:,2])/W1, (x2-box1[:,0])/H1]).T  # Attention: Y1, X1, Y2, X2
-
-    # Coordinates of intersecting box inside bbox 2 (percentage coordinates)
-    ibox2 = torch.stack([(y1-box2[:,2])/W2, (x1-box2[:,0])/H2, (y2-box2[:,2])/W2, (x2-box2[:,0])/H2]) .T
-
-    # Convert percentage coordinates to coordinates in pooled crop
-    for i, NP in enumerate([NPH,NPW,NPH,NPW]):
-        ibox1[:,i] = ibox1[:,i]*NP
-        ibox2[:,i] = ibox2[:,i]*NP
-
+    # Coordinates of intersecting box inside bbox 1
+    x1_1 = x1-box1[:,0]
+    x1_2 = x2-box1[:,0]
+    y1_1 = y1-box1[:,2]
+    y1_2 = y2-box1[:,2]
     if len(pred1.shape) == 5:  # 3D input
+        z1_1 = z1-box1[:,4]
+        z1_2 = z2-box1[:,4]
 
-        NPD = pred1.shape[-1]  # Pooled depth dimension
+    # Coordinates of intersecting box inside bbox 2
+    x2_1 = x1-box2[:,0]
+    x2_2 = x2-box2[:,0]
+    y2_1 = y1-box2[:,2]
+    y2_2 = y2-box2[:,2]
+    z2_1 = z1-box2[:,4]
+    z2_2 = z2-box2[:,4]
 
-        # Repeat the same alignment for every slice
-        align1 = ibox1.unsqueeze(1).repeat(1,NPD,1)
-        align2 = ibox2.unsqueeze(1).repeat(1,NPD,1)
+    # Align
+    pred1 = pred1[x1_1:x1_2,y1_1:y1_2,z1_1:z1_2]
+    pred2 = pred2[x2_1:x2_2,y2_1:y2_1,z2_1:z2_2]
+    gt1 = gt1[x1_1:x1_2,y1_1:y1_2,z1_1:z1_2]
+    gt2 = gt2[x2_1:x2_2,y2_1:y2_1,z2_1:z2_2]
 
-        # Preprocess alignments for roi_align
-        align1 = align1.reshape(B*NPD,4) # Flatten batch and slice dimension
-        align2 = align2.reshape(B*NPD,4)
-        idx = torch.arange(0,B*NPD).unsqueeze(1).to(pred1.device)
-        align1 = torch.cat((idx,align1),dim=1)  # Add index column
-        align2 = torch.cat((idx,align2),dim=1) 
-
-        # Flatten batch and slice dimension of crops
-        pred1 = pred1.permute(0,4,1,2,3).reshape(B*NPD,K,NPH,NPW)
-        pred2 = pred2.permute(0,4,1,2,3).reshape(B*NPD,K,NPH,NPW)
-        gt1 = gt1.permute(0,4,1,2,3).reshape(B*NPD,K,NPH,NPW)
-        gt2 = gt2.permute(0,4,1,2,3).reshape(B*NPD,K,NPH,NPW)
-    
-    elif len(pred1.shape) == 4:  # 2D input
-        align1 = ibox1
-        align2 = ibox2
-        idx = torch.arange(0,B).unsqueeze(1).to(pred1.device)
-        align1 = torch.cat((idx,align1),dim=1)  # Add index column
-        align2 = torch.cat((idx,align2),dim=1) 
-
-    # ROI-align
-    # Note: the roi_align function considers [0,0] the bottom-left corner, that's why ibox is [y1,x1,y2,x2]
-    pred1_align = ops.roi_align(pred1, boxes=align1, output_size=(NPH, NPW), aligned=True)
-    pred2_align = ops.roi_align(pred2, boxes=align2, output_size=(NPH, NPW), aligned=True)
-    gt1_align = ops.roi_align(gt1, boxes=align1, output_size=(NPH, NPW), aligned=True)
-    gt2_align = ops.roi_align(gt2, boxes=align2, output_size=(NPH, NPW), aligned=True)
-
-    if len(pred1.shape) == 5:  # 3D input
-        # Restore slice dimension
-        pred1_align = pred1_align.reshape(B, NPD, K, NPH, NPW).permute(0,2,3,4,1)
-        pred2_align = pred2_align.reshape(B, NPD, K, NPH, NPW).permute(0,2,3,4,1)
-        gt1_align = gt1_align.reshape(B, NPD, K, NPH, NPW).permute(0,2,3,4,1)
-        gt2_align = gt2_align.reshape(B, NPD, K, NPH, NPW).permute(0,2,3,4,1)
-
-    return pred1_align, pred2_align, gt1_align, gt2_align
+    return pred1, pred2, gt1, gt2

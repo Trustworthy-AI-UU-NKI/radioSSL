@@ -79,7 +79,7 @@ class DataGenerator:
                                         pin_memory=True, shuffle=False, num_workers=args.workers, worker_init_fn=seed_worker, generator=generator)
         return dataloader
 
-    def cluster_luna_pretask(self):
+    def cluster_luna_pretask(self, load_gt=True):
         print('using the reverse_aug pretrain on luna')
         args = self.args
         dataloader = {}
@@ -92,8 +92,8 @@ class DataGenerator:
         print(f'Train Images {len(x_train)}, Valid Images {len(x_valid)}')
 
         train_ds = LunaPretask(args, x_train, train=True, transform=self.cluster_spatial_transforms,
-                                     global_transforms=self.cluster_global_transforms, local_transforms=self.cluster_local_transforms)
-        valid_ds = LunaPretask(args, x_valid, train=False)
+                                     global_transforms=self.cluster_global_transforms, local_transforms=self.cluster_local_transforms, load_gt=load_gt)
+        valid_ds = LunaPretask(args, x_valid, train=False, load_gt=load_gt)
 
         generator = torch.Generator()
         generator.manual_seed(args.seed)
@@ -125,17 +125,17 @@ class DataGenerator:
                                         pin_memory=True, shuffle=False, num_workers=args.workers, worker_init_fn=seed_worker, generator=generator)
         return dataloader
 
-    def cluster_brats_pretask(self):
+    def cluster_brats_pretask(self, load_gt=True):
         print('using the reverse_aug pretrain on brats')
         args = self.args
         dataloader = {}
         
-        x_train, x_valid, _ = get_brats_pretrain_list(self.args.data, self.args.ratio, suffix='_global_')
+        x_train, x_valid, _ = get_brats_pretrain_list(self.args.data, args.ratio, suffix='_global_')
         print(f'Train Images {len(x_train)}, Valid Images {len(x_valid)}')
 
         train_ds = BratsPretask(args, x_train, train=True, transform=self.cluster_spatial_transforms,
-                                     global_transforms=self.cluster_global_transforms, local_transforms=self.cluster_local_transforms)
-        valid_ds = BratsPretask(args, x_valid, train=False)
+                                     global_transforms=self.cluster_global_transforms, local_transforms=self.cluster_local_transforms, load_gt=load_gt)
+        valid_ds = BratsPretask(args, x_valid, train=False, load_gt=load_gt)
 
         generator = torch.Generator()
         generator.manual_seed(args.seed)
@@ -170,7 +170,7 @@ class DataGenerator:
                                         pin_memory=True, shuffle=False, num_workers=args.workers, worker_init_fn=seed_worker, generator=generator)
         return dataloader
 
-    def cluster_lits_pretask(self):
+    def cluster_lits_pretask(self, load_gt=True):
         args = self.args
         dataloader = {}
 
@@ -182,8 +182,8 @@ class DataGenerator:
         print(f'Train Images {len(x_train)}, Valid Images {len(x_valid)}')
 
         train_ds = LitsPretask(args, x_train, train=True, transform=self.cluster_spatial_transforms,
-                                     global_transforms=self.cluster_global_transforms, local_transforms=self.cluster_local_transforms)
-        valid_ds = LitsPretask(args, x_valid, train=False)  
+                                     global_transforms=self.cluster_global_transforms, local_transforms=self.cluster_local_transforms, load_gt=load_gt)
+        valid_ds = LitsPretask(args, x_valid, train=False, load_gt=load_gt)  
 
         print(f'Train Images {len(x_train)}, Valid Images {len(x_valid)}')
 

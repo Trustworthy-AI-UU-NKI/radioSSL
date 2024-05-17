@@ -82,7 +82,6 @@ def train_3d(args, data_loader, run_dir, writer=None):
     if not args.cpu:
         criterion = criterion.cuda()
         cosine = cosine.cuda()
-        cudnn.benchmark = True
 
     grid_pred_all = []  # Clustering task predictions to visualize in a grid (epoch X image) for each scale
 
@@ -179,7 +178,7 @@ def train_pcrlv2_inner(args, epoch, train_loader, model, optimizer, scaler, crit
     total_loss_meter = AverageMeter()
 
     end = time.time()
-    for idx, (input1, input2, gt1, gt2, _, _, local_views) in enumerate(train_loader):
+    for idx, (input1, input2, gt1, gt2, _, _, local_views, _) in enumerate(train_loader):
 
         B, C, H, W, D = input1.shape
 
@@ -274,7 +273,7 @@ def train_cluster_inner(args, epoch, train_loader, model, optimizer, scaler, wri
     total_loss_meter = AverageMeter()
 
     end = time.time()
-    for idx, (input1, input2, _, _, crop1_coords, crop2_coords, _) in enumerate(train_loader):
+    for idx, (input1, input2, gt1, gt2, crop1_coords, crop2_coords, _, _) in enumerate(train_loader):
 
         B, C, H, W, D = input1.shape
 
@@ -292,8 +291,6 @@ def train_cluster_inner(args, epoch, train_loader, model, optimizer, scaler, wri
         device_type = 'cpu' if args.cpu else 'cuda'
         with autocast(device_type=device_type):  # Run in mixed-precision
 
-            # STUDENT CLUSTER ASSIGNMENT ------------------------------------
-
             # Get cluster predictions from student U-Net
             pred1 = model.module(x1)
             pred2 = model.module(x2)
@@ -301,38 +298,7 @@ def train_cluster_inner(args, epoch, train_loader, model, optimizer, scaler, wri
             # Convert to probabilities
             pred1 = pred1.softmax(2)
             pred2 = pred2.softmax(2)
-
-            # TEACHER CLUSTER ASSIGNMENT ------------------------------------
-
-            with torch.no_grad():
-                # Get upsampled features from teacher DINO ViT16 encoder
-                B, C, H, W, D = x1.shape
-                feat_vec1 = []
-                feat_vec2 = []
-                for i in range(B):  # For cuda memory efficiency, enter only 1 (actual) batch at a time (It's actually a batch with all the 2D slices from the 3D input)
-                    #  B x 1 x H x W x D -(Flatten slices)-> B*D x 1 x H x W -(RGB)->  B*D x 3 x)-> B*D x C' x H x W -(Vectorize)-> B*D*H*W x C' 
-                    feat_vec1.append(model.module.featup(x1[i:i+D].permute(0,4,1,2,3).reshape(B*D,C,H,W).repeat(1,3,1,1)).permute(0,2,3,1).flatten(0,2))
-                    feat_vec2.append(model.module.featup(x2[i:i+D].permute(0,4,1,2,3).reshape(B*D,C,H,W).repeat(1,3,1,1)).permute(0,2,3,1).flatten(0,2))
-                feat_vec1 = torch.cat(feat_vec1)
-                feat_vec2 = torch.cat(feat_vec2)
-
-                # Perform K-Means on teacher feature vectors
-                K = model.module.kmeans.n_clusters
-                # gt_vec1 = model.module.kmeans.fit_predict(x=feat_vec1.unsqueeze(0))
-                # gt_vec2 = model.module.kmeans.fit_predict(x=feat_vec2.unsqueeze(0))
-                model.module.kmeans = model.module.kmeans.fit(torch.cat([feat_vec1,feat_vec2]).detach().cpu().numpy())
-                gt_vec = torch.from_numpy(model.module.kmeans.predict(torch.cat([feat_vec1,feat_vec2]).detach().cpu().numpy())).cuda().to(torch.int64)
-
-                if not args.cpu:
-                    gt_vec1 = gt_vec1.cuda()
-                    gt_vec2 = gt_vec2.cuda()
-        
-                # Convert to one-hot encoding and restore spatial dimensions
-                gt1 = f.one_hot(gt_vec[:gt_vec.shape[0]//2], K).reshape(-1, H, W, K).permute(0,4,2,3,1)  # B*D*H*W x K -> B x D x H x W x K -> B x K x H x W x D
-                gt2 = f.one_hot(gt_vec[gt_vec.shape[0]//2:], K).reshape(-1, H, W, K).permute(0,4,2,3,1)
-
-            # --------------------------------------------------------------
-
+            
         # ROI-align crop intersection with cluster assignment intersection
         roi_pred1, roi_pred2, roi_gt1, roi_gt2 = roi_align_intersect(pred1, pred2, gt1, gt2, crop1_coords, crop2_coords)
 
@@ -467,7 +433,7 @@ def val_cluster_inner(args, epoch, val_loader, model, colors):
 
         model.eval()
 
-        for idx, (image, _, gt, _, crop_coords, _, _) in enumerate(val_loader):
+        for idx, (image, _, gt, _, _, _, _, _) in enumerate(val_loader):
             
             if idx != 0:
                 continue  # Validate only batch 2

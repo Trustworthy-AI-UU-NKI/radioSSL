@@ -15,7 +15,6 @@ import torch.nn.functional as f
 from torch import autocast
 
 from faiss import Kmeans
-from sklearn.decomposition import PCA
 
 from data import DataGenerator
 from tools import set_seed
@@ -93,29 +92,29 @@ if __name__ == '__main__':
             x1 = input1.permute(0,4,1,2,3).reshape(B*D,C,H,W)  # B x C x H x W x D -> B*D x C x H x W
             x2 = input2.permute(0,4,1,2,3).reshape(B*D,C,H,W)
 
-            # device_type = 'cpu' if args.cpu else 'cuda'
-            # with autocast(device_type=device_type):  # Run in mixed-precision
+            device_type = 'cpu' if args.cpu else 'cuda'
+            with autocast(device_type=device_type):  # Run in mixed-precision
 
-            with torch.no_grad():
-                
-                # Get upsampled features from teacher DINO ViT16 encoder and flatten spatial dimensions to get feature vectors for each pixel
-                # B*D x 1 x H x W -(RGB)->  B*D x 3 x H x W -(Featup)-> B*D x C' x H x W -(Vectorize)-> B*D*H*W x C' 
-                feat_vec1 = torch.zeros((B*D,384,H,W))
-                feat_vec2 = torch.zeros((B*D,384,H,W))
-                for b_idx in range(B*D):
-                    feat_vec1[b_idx] = featup.module(x1[b_idx].unsqueeze(0).repeat(1,3,1,1))
-                    feat_vec2[b_idx] = featup.module(x2[b_idx].unsqueeze(0).repeat(1,3,1,1))
-                feat_vec1 = feat_vec1.permute(0,2,3,1).flatten(0,2)
-                feat_vec2 = feat_vec2.permute(0,2,3,1).flatten(0,2)
+                with torch.no_grad():
+                    
+                    # Get upsampled features from teacher DINO ViT16 encoder and flatten spatial dimensions to get feature vectors for each pixel
+                    # B*D x 1 x H x W -(RGB)->  B*D x 3 x H x W -(Featup)-> B*D x C' x H x W -(Vectorize)-> B*D*H*W x C' 
+                    feat_vec1 = torch.zeros((B*D,384,H,W))
+                    feat_vec2 = torch.zeros((B*D,384,H,W))
+                    for b_idx in range(B*D):
+                        feat_vec1[b_idx] = featup.module(x1[b_idx].unsqueeze(0).repeat(1,3,1,1))
+                        feat_vec2[b_idx] = featup.module(x2[b_idx].unsqueeze(0).repeat(1,3,1,1))
+                    feat_vec1 = feat_vec1.permute(0,2,3,1).flatten(0,2)
+                    feat_vec2 = feat_vec2.permute(0,2,3,1).flatten(0,2)
 
-                # Prepare data
-                K = args.k
-                N, E = feat_vec1.shape  # Number of points, Feature vector size
+                    # Prepare data
+                    K = args.k
+                    N, E = feat_vec1.shape  # Number of points, Feature vector size
 
-                gt_vec1 = np.zeros((N, 1))
-                gt_vec2 = np.zeros((N, 1))
-                _, gt_vec1 = kmeans.index.search(feat_vec1.cpu().numpy(), K)
-                _, gt_vec2 = kmeans.index.search(feat_vec2.cpu().numpy(), K)
+                    gt_vec1 = np.zeros((N, 1))
+                    gt_vec2 = np.zeros((N, 1))
+                    _, gt_vec1 = kmeans.index.search(feat_vec1.cpu().numpy(), K)
+                    _, gt_vec2 = kmeans.index.search(feat_vec2.cpu().numpy(), K)
 
                 gt_vec1 = torch.from_numpy(gt_vec1).to(torch.int64)
                 gt_vec2 = torch.from_numpy(gt_vec2).to(torch.int64)

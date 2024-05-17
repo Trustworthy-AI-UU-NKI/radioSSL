@@ -1,4 +1,3 @@
-import os
 import sys
 
 import numpy as np
@@ -9,9 +8,7 @@ import random
 from copy import deepcopy
 
 from tools import prepare_model, get_loss, dice_coeff
-from torch.utils.tensorboard import SummaryWriter
 
-from matplotlib import pyplot as plt
 
 
 def train_segmentation(args, dataloader, in_channels, n_classes, run_dir, writer=None):

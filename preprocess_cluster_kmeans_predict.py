@@ -37,8 +37,6 @@ if __name__ == '__main__':
     parser.add_argument('--k', default=10, type=int, help='Number of clusters for clustering pretask')
     parser.add_argument('--cpu', action='store_true', default=False, help='To run on CPU or not')
     args = parser.parse_args()
-    if not os.path.exists(args.output):
-        os.makedirs(args.output)
     print(args)
     print()
 
@@ -68,11 +66,9 @@ if __name__ == '__main__':
         featup = featup.cuda()
     else:
         featup = featup.cpu()
-    kmeans = Kmeans(d=384, k=args.k, seed=args.seed, verbose=False, gpu=True if not args.cpu else False)
-
+    kmeans = Kmeans(d=384, k=args.k, niter=1, seed=args.seed, verbose=False, gpu=True if not args.cpu else False)
+    centroids = np.load(os.path.join(args.data,f'kmeans_centroids_k{args.k}.npy'))
     featup.eval()
-
-
 
     # Predict with K-Means --------------------------------------------------------------------------------------------------------------
     print('Predict clusters with K-Means...')
@@ -92,29 +88,26 @@ if __name__ == '__main__':
             x1 = input1.permute(0,4,1,2,3).reshape(B*D,C,H,W)  # B x C x H x W x D -> B*D x C x H x W
             x2 = input2.permute(0,4,1,2,3).reshape(B*D,C,H,W)
 
-            device_type = 'cpu' if args.cpu else 'cuda'
-            with autocast(device_type=device_type):  # Run in mixed-precision
+            with torch.no_grad():
+                
+                # Get upsampled features from teacher DINO ViT16 encoder and flatten spatial dimensions to get feature vectors for each pixel
+                # B*D x 1 x H x W -(RGB)->  B*D x 3 x H x W -(Featup)-> B*D x C' x H x W -(Vectorize)-> B*D*H*W x C' 
+                feat_vec1 = torch.zeros((B*D,384,H,W))
+                feat_vec2 = torch.zeros((B*D,384,H,W))
+                MB = 4 # Mini-batch size (to work on my local machine)
+                for b_idx in tqdm(range(0,B*D,MB), leave=False):  
+                    feat_vec1[b_idx:b_idx+MB] = featup.module(x1[b_idx:b_idx+MB].repeat(1,3,1,1))
+                    feat_vec2[b_idx:b_idx+MB] = featup.module(x2[b_idx:b_idx+MB].repeat(1,3,1,1))
+                feat_vec1 = feat_vec1.permute(0,2,3,1).flatten(0,2)
+                feat_vec2 = feat_vec2.permute(0,2,3,1).flatten(0,2)
 
-                with torch.no_grad():
-                    
-                    # Get upsampled features from teacher DINO ViT16 encoder and flatten spatial dimensions to get feature vectors for each pixel
-                    # B*D x 1 x H x W -(RGB)->  B*D x 3 x H x W -(Featup)-> B*D x C' x H x W -(Vectorize)-> B*D*H*W x C' 
-                    feat_vec1 = torch.zeros((B*D,384,H,W))
-                    feat_vec2 = torch.zeros((B*D,384,H,W))
-                    for b_idx in range(B*D):
-                        feat_vec1[b_idx] = featup.module(x1[b_idx].unsqueeze(0).repeat(1,3,1,1))
-                        feat_vec2[b_idx] = featup.module(x2[b_idx].unsqueeze(0).repeat(1,3,1,1))
-                    feat_vec1 = feat_vec1.permute(0,2,3,1).flatten(0,2)
-                    feat_vec2 = feat_vec2.permute(0,2,3,1).flatten(0,2)
+                # Prepare data
+                K = args.k
+                N, E = feat_vec1.shape  # Number of points, Feature vector size
 
-                    # Prepare data
-                    K = args.k
-                    N, E = feat_vec1.shape  # Number of points, Feature vector size
-
-                    gt_vec1 = np.zeros((N, 1))
-                    gt_vec2 = np.zeros((N, 1))
-                    _, gt_vec1 = kmeans.index.search(feat_vec1.cpu().numpy(), K)
-                    _, gt_vec2 = kmeans.index.search(feat_vec2.cpu().numpy(), K)
+                kmeans.train(feat_vec1, init_centroids=centroids)  # Dummy train for loading pretrained centroids
+                _, gt_vec1 = kmeans.index.search(feat_vec1.cpu().numpy(), 1)
+                _, gt_vec2 = kmeans.index.search(feat_vec2.cpu().numpy(), 1)
 
                 gt_vec1 = torch.from_numpy(gt_vec1).to(torch.int64)
                 gt_vec2 = torch.from_numpy(gt_vec2).to(torch.int64)
@@ -123,15 +116,16 @@ if __name__ == '__main__':
                     gt_vec2 = gt_vec2.cuda()
 
                 # Restore spatial dimensions
-                gt1 = gt_vec1.reshape(B, D, H, W, K).permute(0,4,2,3,1)  # B*D*H*W x K -> B x D x H x W x K -> B x K x H x W x D
-                gt2 = gt_vec2.reshape(B, D, H, W, K).permute(0,4,2,3,1)
+                gt1 = f.one_hot(gt_vec1).reshape(B, D, H, W, K).permute(0,4,2,3,1)  # B*D*H*W -> B*D*H*W x K -> B x D x H x W x K -> B x K x H x W x D
+                gt2 = f.one_hot(gt_vec2).reshape(B, D, H, W, K).permute(0,4,2,3,1)
 
-                # # Save ground truth files
-                # for batch_idx, real_idx in enumerate(index):
-                #     img_path = train_loader.dataset.imgs[index]
-                #     name, ext = os.path.splitext(img_path)
-                #     gt_path = name + f"_gt_k{args.k}" + ext
-                #     np.save(gt_path, torch.cat(gt1[batch_idx].unsqueeze(0),gt2[batch_idx].unsqueeze(0)).cpu().numpy())
+                # Save ground truth files
+                index = index.tolist()
+                for batch_idx, real_idx in enumerate(index):
+                    img_path = train_loader.dataset.imgs[real_idx]
+                    name, ext = os.path.splitext(img_path)
+                    gt_path = name + f"_gt_k{args.k}" + ext
+                    np.save(gt_path, torch.cat((gt1[batch_idx].unsqueeze(0),gt2[batch_idx].unsqueeze(0))).cpu().numpy())
                 
                 tqdm_progress.update(1)
 
@@ -142,42 +136,43 @@ if __name__ == '__main__':
                 # _, colors = kmeans.index.search(clusters, 3, )
 
 
-                # Select 2D images
-                img_idx = 0
-                m_idx = 0
-                s_idx = D//2
-                in1 = input1[img_idx,m_idx,:,:,s_idx].unsqueeze(0)
-                in2 = input2[img_idx,m_idx,:,:,s_idx].unsqueeze(0)
-                gt1 = gt1[img_idx,:,:,:,s_idx].argmax(dim=0).unsqueeze(0)
-                gt2 = gt2[img_idx,:,:,:,s_idx].argmax(dim=0).unsqueeze(0)
+                # # Select 2D images
+                # img_idx = 0
+                # m_idx = 0
+                # s_idx = D//2
+                # in1 = input1[img_idx,m_idx,:,:,s_idx].unsqueeze(0)
+                # in2 = input2[img_idx,m_idx,:,:,s_idx].unsqueeze(0)
+                # gt1_img = gt1[img_idx,:,:,:,s_idx].argmax(dim=0).unsqueeze(0)
+                # gt2_img = gt2[img_idx,:,:,:,s_idx].argmax(dim=0).unsqueeze(0)
 
-                # Min-max norm input images
-                in1 = (in1 - in1.min())/(in1.max() - in1.min())
-                in2 = (in2 - in2.min())/(in2.max() - in2.min())
+                # # Min-max norm input images
+                # in1 = (in1 - in1.min())/(in1.max() - in1.min())
+                # in2 = (in2 - in2.min())/(in2.max() - in2.min())
 
-                # Send to cpu
-                in1 = in1.cpu().detach()
-                in2 = in2.cpu().detach()
-                gt1 = gt1.cpu().detach()
-                gt2 = gt2.cpu().detach()
+                # # Send to cpu
+                # in1 = in1.cpu().detach()
+                # in2 = in2.cpu().detach()
+                # gt1_img = gt1_img.cpu().detach()
+                # gt2_img = gt2_img.cpu().detach()
 
-                # Give color to each cluster in cluster masks
-                gt1 = gt1.repeat((3,1,1)).permute(1,2,0).float()
-                gt2 = gt2.repeat((3,1,1)).permute(1,2,0).float()
-                for c in range(colors.shape[0]):
-                    gt1[gt1[:,:,0] == c] = colors[c]
-                    gt2[gt2[:,:,0] == c] = colors[c]
-                gt1 = gt1.permute(2,0,1)
-                gt2 = gt2.permute(2,0,1)
+                # # Give color to each cluster in cluster masks
+                # gt1_img = gt1_img.repeat((3,1,1)).permute(1,2,0).float()
+                # gt2_img = gt2_img.repeat((3,1,1)).permute(1,2,0).float()
+                # for c in range(colors.shape[0]):
+                #     gt1_img[gt1_img[:,:,0] == c] = colors[c]
+                #     gt2_img[gt2_img[:,:,0] == c] = colors[c]
+                # gt1_img = gt1_img.permute(2,0,1)
+                # gt2_img = gt2_img.permute(2,0,1)
 
-                # Pad images for better visualization
-                in1 = f.pad(in1.unsqueeze(0),(2,1,2,2),value=1)
-                in2 = f.pad(in2.unsqueeze(0),(1,2,2,2),value=1)                
-                gt1 = f.pad(gt1.unsqueeze(0),(2,1,2,2),value=1)
-                gt2 = f.pad(gt2.unsqueeze(0),(1,2,2,2),value=1)
+                # # Pad images for better visualization
+                # in1 = f.pad(in1.unsqueeze(0),(2,1,2,2),value=1)
+                # in2 = f.pad(in2.unsqueeze(0),(1,2,2,2),value=1)                
+                # gt1_img = f.pad(gt1_img.unsqueeze(0),(2,1,2,2),value=1)
+                # gt2_img = f.pad(gt2_img.unsqueeze(0),(1,2,2,2),value=1)
 
-                # Combine crops
-                in_img = torch.cat((in1,in2),dim=3).squeeze(0).cpu().detach().numpy()
-                gt_img = torch.cat((gt1,gt2),dim=3).squeeze(0).cpu().detach().numpy()
+                # # Combine crops
+                # in_img = torch.cat((in1,in2),dim=3).squeeze(0).cpu().detach().numpy()
+                # gt_img = torch.cat((gt1_img,gt2_img),dim=3).squeeze(0).cpu().detach().numpy()
 
+                # test=123
 

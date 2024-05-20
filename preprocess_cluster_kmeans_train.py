@@ -31,7 +31,6 @@ if __name__ == '__main__':
     parser.add_argument('--model', default='cluster', choices=['cluster'], help='Choose the model')
     parser.add_argument('--b', default=16, type=int, help='Batch size')
     parser.add_argument('--b_kmeans', default=16, type=int, help='Batch size of kmeans')
-    parser.add_argument('--output', default='None', type=str, help='Output path')
     parser.add_argument('--n', default='luna', choices=['luna', 'lidc', 'brats', 'lits'], type=str, help='Dataset to use')
     parser.add_argument('--workers', default=4, type=int, help='Num of workers')
     parser.add_argument('--gpus', default='0,1,2,3', type=str, help='GPU indices to use')
@@ -39,8 +38,6 @@ if __name__ == '__main__':
     parser.add_argument('--k', default=10, type=int, help='Number of clusters for clustering pretask')
     parser.add_argument('--cpu', action='store_true', default=False, help='To run on CPU or not')
     args = parser.parse_args()
-    if not os.path.exists(args.output):
-        os.makedirs(args.output)
     print(args)
     print()
 
@@ -53,10 +50,6 @@ if __name__ == '__main__':
     # Force arguments
     args.model = 'cluster'
     args.ratio = 1
-
-    # Generate colors for cluster masks
-    palette = sns.color_palette(palette='bright', n_colors=args.k)
-    colors = torch.Tensor([list(color) for color in palette]).cpu()  # cpu because we apply it on a detached tensor later
 
     # Get dataloader
     generator = DataGenerator(args)
@@ -102,7 +95,7 @@ if __name__ == '__main__':
                     # B*D x 1 x H x W -(RGB)->  B*D x 3 x H x W -(Featup)-> B*D x C' x H x W -(Vectorize)-> B*D*H*W x C' 
                     feat_vec1 = torch.zeros((B*D,384,H,W))
                     feat_vec2 = torch.zeros((B*D,384,H,W))
-                    MB = 16 # Mini-batch size (to work on my local machine)
+                    MB = 8 # Mini-batch size (to work on my local machine)
                     for b_idx in tqdm(range(0,B*D,MB), leave=False):  
                         feat_vec1[b_idx:b_idx+MB] = featup.module(x1[b_idx:b_idx+MB].repeat(1,3,1,1))
                         feat_vec2[b_idx:b_idx+MB] = featup.module(x2[b_idx:b_idx+MB].repeat(1,3,1,1))

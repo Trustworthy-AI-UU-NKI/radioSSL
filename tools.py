@@ -610,6 +610,9 @@ def roi_align_intersect(pred1, pred2, gt1, gt2, box1, box2):
     # Cluster assignments to align for crop 1 and crop 2: pred1, pred2, gt1, gt2
     # Coordinates of the crop bounding box : box1, box2
 
+    # Input Dimensions
+    B, K, H, W, D = pred1.shape
+
     # Convert to float
     pred1 = pred1.float()
     pred2 = pred2.float()
@@ -621,7 +624,7 @@ def roi_align_intersect(pred1, pred2, gt1, gt2, box1, box2):
     x2 = torch.minimum(box1[:,1], box2[:,1])
     y1 = torch.maximum(box1[:,2], box2[:,2])
     y2 = torch.minimum(box1[:,3], box2[:,3])
-    z1 = torch.minimum(box1[:,4], box2[:,4])
+    z1 = torch.maximum(box1[:,4], box2[:,4])
     z2 = torch.minimum(box1[:,5], box2[:,5])
 
     # Coordinates of intersecting box inside bbox 1
@@ -629,9 +632,8 @@ def roi_align_intersect(pred1, pred2, gt1, gt2, box1, box2):
     x1_2 = x2-box1[:,0]
     y1_1 = y1-box1[:,2]
     y1_2 = y2-box1[:,2]
-    if len(pred1.shape) == 5:  # 3D input
-        z1_1 = z1-box1[:,4]
-        z1_2 = z2-box1[:,4]
+    z1_1 = z1-box1[:,4]
+    z1_2 = z2-box1[:,4]
 
     # Coordinates of intersecting box inside bbox 2
     x2_1 = x1-box2[:,0]
@@ -642,9 +644,10 @@ def roi_align_intersect(pred1, pred2, gt1, gt2, box1, box2):
     z2_2 = z2-box2[:,4]
 
     # Align
-    pred1 = pred1[x1_1:x1_2,y1_1:y1_2,z1_1:z1_2]
-    pred2 = pred2[x2_1:x2_2,y2_1:y2_1,z2_1:z2_2]
-    gt1 = gt1[x1_1:x1_2,y1_1:y1_2,z1_1:z1_2]
-    gt2 = gt2[x2_1:x2_2,y2_1:y2_1,z2_1:z2_2]
+    for b_idx in range(B):
+        pred1[b_idx] = F.interpolate(pred1[b_idx, :, x1_1[b_idx]:x1_2[b_idx], y1_1[b_idx]:y1_2[b_idx], z1_1[b_idx]:z1_2[b_idx]].unsqueeze(0), size=(H,W,D))
+        pred2[b_idx] = F.interpolate(pred2[b_idx, :, x2_1[b_idx]:x2_2[b_idx], y2_1[b_idx]:y2_2[b_idx], z2_1[b_idx]:z2_2[b_idx]].unsqueeze(0), size=(H,W,D))
+        gt1[b_idx] = F.interpolate(gt1[b_idx, :, x1_1[b_idx]:x1_2[b_idx], y1_1[b_idx]:y1_2[b_idx], z1_1[b_idx]:z1_2[b_idx]].unsqueeze(0), size=(H,W,D))
+        gt2[b_idx] = F.interpolate(gt2[b_idx, :, x2_1[b_idx]:x2_2[b_idx], y2_1[b_idx]:y2_2[b_idx], z2_1[b_idx]:z2_2[b_idx]].unsqueeze(0), size=(H,W,D))
 
     return pred1, pred2, gt1, gt2

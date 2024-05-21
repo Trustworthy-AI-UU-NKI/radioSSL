@@ -13,10 +13,6 @@ import torch.nn as nn
 import torch.nn.functional as f
 from torch import autocast
 from torch import autocast
-if torch.cuda.is_available():
-    from torch.cuda.amp import GradScaler
-else:
-    from torch.cpu.amp import GradScaler
 
 from models import PCRLv2, Cluster
 from tools import adjust_learning_rate, AverageMeter, swav_loss, roi_align_intersect
@@ -90,7 +86,6 @@ def train_2d(args, data_loader, run_dir, writer=None):
     if not args.cpu:
         model = model.cuda()
 
-    scaler = GradScaler()
     optimizer = torch.optim.SGD(model.parameters(),
                                 lr=args.lr,
                                 momentum=args.momentum,
@@ -113,9 +108,9 @@ def train_2d(args, data_loader, run_dir, writer=None):
         time1 = time.time()
         
         if args.model == 'pcrlv2':
-            loss, prob, total_loss, writer = train_pcrlv2_inner(args, epoch, train_loader, model, optimizer, scaler, criterion, cosine, writer)
+            loss, prob, total_loss, writer = train_pcrlv2_inner(args, epoch, train_loader, model, optimizer, criterion, cosine, writer)
         elif 'cluster' in args.model:
-            loss, prob, total_loss, writer = train_cluster_inner(args, epoch, train_loader, model, optimizer, scaler, writer, colors)
+            loss, prob, total_loss, writer = train_cluster_inner(args, epoch, train_loader, model, optimizer, writer, colors)
 
         time2 = time.time()
         print('epoch {}, total time {:.2f}'.format(epoch, time2 - time1), flush=True)
@@ -140,7 +135,7 @@ def train_2d(args, data_loader, run_dir, writer=None):
             torch.cuda.empty_cache()
 
 
-def train_pcrlv2_inner(args, epoch, train_loader, model, optimizer, scaler, criterion, cosine, writer):
+def train_pcrlv2_inner(args, epoch, train_loader, model, optimizer, criterion, cosine, writer):
     """
     one epoch training for instance discrimination
     """
@@ -212,8 +207,8 @@ def train_pcrlv2_inner(args, epoch, train_loader, model, optimizer, scaler, crit
 
         # Backward
         optimizer.zero_grad()
-        scaler.scale(loss).backward()
-        scaler.step(optimizer)
+        loss.backward()
+        optimizer.step()
 
         # Meters
         mg_loss_meter.update(loss1.item(), B)
@@ -243,7 +238,7 @@ def train_pcrlv2_2d(args, data_loader, run_dir, writer=None):
     train_2d(args, data_loader, run_dir, writer=writer)
 
 
-def train_cluster_inner(args, epoch, train_loader, model, optimizer, scaler, writer, colors):
+def train_cluster_inner(args, epoch, train_loader, model, optimizer, writer, colors):
     """
     one epoch training for instance discrimination
     """
@@ -370,9 +365,8 @@ def train_cluster_inner(args, epoch, train_loader, model, optimizer, scaler, wri
 
         # Backward
         optimizer.zero_grad()
-        scaler.scale(loss).backward()
-        scaler.step(optimizer)
-        scaler.update()
+        loss.backward()
+        optimizer.step()
 
         # Meters
         mg_loss_meter.update(loss1.item(), B)

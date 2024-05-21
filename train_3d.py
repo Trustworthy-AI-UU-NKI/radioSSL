@@ -20,12 +20,6 @@ import torch.backends.cudnn as cudnn
 import torch.nn as nn
 import torch.nn.functional as f
 import torchvision.transforms.functional as t
-from torch import autocast
-from torch import autocast
-if torch.cuda.is_available():
-    from torch.cuda.amp import GradScaler
-else:
-    from torch.cpu.amp import GradScaler
 
 from models import PCRLv23d, Cluster3d, TraceWrapper
 from tools import adjust_learning_rate, AverageMeter, sinkhorn, swav_loss, roi_align_intersect
@@ -72,7 +66,6 @@ def train_3d(args, data_loader, run_dir, writer=None):
     if not args.cpu:
         model = model.cuda()
 
-    scaler = GradScaler()
     optimizer = torch.optim.SGD(model.parameters(),
                                 lr=args.lr,
                                 momentum=args.momentum,
@@ -91,14 +84,14 @@ def train_3d(args, data_loader, run_dir, writer=None):
         # TRAINING
 
         adjust_learning_rate(epoch, args, optimizer)
-        print("==> training...")
+        print("==> Training...")
 
         time1 = time.time()
 
         if args.model == 'pcrlv2':
-            loss, prob, total_loss, writer = train_pcrlv2_inner(args, epoch, train_loader, model, optimizer, scaler, criterion, cosine, writer)
+            loss, prob, total_loss, writer = train_pcrlv2_inner(args, epoch, train_loader, model, optimizer, criterion, cosine, writer)
         elif 'cluster' in args.model:
-            loss, prob, total_loss, writer = train_cluster_inner(args, epoch, train_loader, model, optimizer, scaler, writer, colors)
+            loss, prob, total_loss, writer = train_cluster_inner(args, epoch, train_loader, model, optimizer, writer, colors)
 
         time2 = time.time()
         print('epoch {}, total time {:.2f}'.format(epoch, time2 - time1))
@@ -115,7 +108,7 @@ def train_3d(args, data_loader, run_dir, writer=None):
             # TODO: Currently only works for BraTS Clustering
             # The n_epochs - 2 is because we want to sample one less so that we can always add the final epoch in the end regardless of the step, and one less because epoch 0 is always included
 
-            print("==> validating...")
+            print("==> Validating...")
             
             # Validate
             row_pred_all = val_cluster_inner(args, epoch, val_loader, model, colors)  # Array of a row for each scale to add to the grid of each scale
@@ -163,7 +156,7 @@ def train_3d(args, data_loader, run_dir, writer=None):
             torch.cuda.empty_cache()
 
         
-def train_pcrlv2_inner(args, epoch, train_loader, model, optimizer, scaler, criterion, cosine, writer):
+def train_pcrlv2_inner(args, epoch, train_loader, model, optimizer, criterion, cosine, writer):
     """
     one epoch training for instance discrimination
     """
@@ -225,9 +218,8 @@ def train_pcrlv2_inner(args, epoch, train_loader, model, optimizer, scaler, crit
             print('skip the step')
             continue
         optimizer.zero_grad()
-        scaler.scale(loss).backward()
-        scaler.step(optimizer)
-        scaler.update()
+        loss.backward()
+        optimizer.step()
 
         # Meters
         mg_loss_meter.update(loss1.item(), bsz)
@@ -263,7 +255,7 @@ def train_pcrlv2_3d(args, data_loader, run_dir, writer=None):
     train_3d(args, data_loader, run_dir, writer=writer)
 
 
-def train_cluster_inner(args, epoch, train_loader, model, optimizer, scaler, writer, colors):
+def train_cluster_inner(args, epoch, train_loader, model, optimizer, writer, colors):
 
     model.train()
 
@@ -301,8 +293,8 @@ def train_cluster_inner(args, epoch, train_loader, model, optimizer, scaler, wri
         pred1 = pred1.softmax(2)
         pred2 = pred2.softmax(2)
 
-        gt1 = f.one_hot(gt1).permute(0,4,1,2,3)  # B x H x W x D -> B x H x W x D x K -> B x K x H x W x D
-        gt2 = f.one_hot(gt2).permute(0,4,1,2,3)
+        gt1 = f.one_hot(gt1.long()).permute(0,4,1,2,3)  # B x H x W x D -> B x H x W x D x K -> B x K x H x W x D
+        gt2 = f.one_hot(gt2.long()).permute(0,4,1,2,3)
             
         # ROI-align crop intersection with cluster assignment intersection
         roi_pred1, roi_pred2, roi_gt1, roi_gt2 = roi_align_intersect(pred1, pred2, gt1, gt2, crop1_coords, crop2_coords)
@@ -329,12 +321,6 @@ def train_cluster_inner(args, epoch, train_loader, model, optimizer, scaler, wri
                 # Min-max norm input images
                 in1 = (in1 - in1.min())/(in1.max() - in1.min())
                 in2 = (in2 - in2.min())/(in2.max() - in2.min())
-
-                # Interpolate cluster masks to original input shape
-                pred1 = f.interpolate(pred1.float().unsqueeze(0), size=(H,W)).squeeze(0)
-                pred2 = f.interpolate(pred2.float().unsqueeze(0), size=(H,W)).squeeze(0)
-                gt1 = f.interpolate(gt1.float().unsqueeze(0), size=(H,W)).squeeze(0)
-                gt2 = f.interpolate(gt2.float().unsqueeze(0), size=(H,W)).squeeze(0)
 
                 # Send to cpu
                 in1 = in1.cpu().detach()
@@ -395,9 +381,8 @@ def train_cluster_inner(args, epoch, train_loader, model, optimizer, scaler, wri
             print('skip the step')
             continue
         optimizer.zero_grad()
-        scaler.scale(loss).backward()
-        scaler.step(optimizer)
-        scaler.update()
+        loss.backward()
+        optimizer.step()
 
         # Meters
         mg_loss_meter.update(loss1.item(), B)
@@ -475,7 +460,6 @@ def val_cluster_inner(args, epoch, val_loader, model, colors):
                     grid_pred.append(x_i)
             for img_idx in range(n_images): # Next, add the predictions for each image at the current epoch as the next row
                 pred_i = pred[img_idx,:,:,:,pred.shape[-1]//2].argmax(dim=0).unsqueeze(0)  # Take only hard cluster assignment (argmax)
-                pred_i = f.interpolate(pred_i.float().unsqueeze(0), size=(H,W)).squeeze(0)  # Interpolate cluster masks to original input shape
                 pred_i = pred_i.repeat((3,1,1)).permute(1,2,0)  # Convert to RGB and move channel dim to the end
                 pred_i = pred_i.cpu().detach() # Send pred and color tensors to cpu
                 colors = colors.cpu()

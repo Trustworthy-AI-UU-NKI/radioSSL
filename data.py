@@ -93,7 +93,7 @@ class DataGenerator:
 
         train_ds = LunaPretask(args, x_train, train=True, transform=self.cluster_spatial_transforms,
                                      global_transforms=self.cluster_global_transforms, local_transforms=self.cluster_local_transforms, load_gt=load_gt)
-        valid_ds = LunaPretask(args, x_valid, train=False, load_gt=load_gt)
+        valid_ds = LunaPretask(args, x_valid, train=False, load_gt=False)
 
         generator = torch.Generator()
         generator.manual_seed(args.seed)

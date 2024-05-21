@@ -57,7 +57,7 @@ class BratsPretask(Dataset):
             if self.load_gt:
                 name, ext = os.path.splitext(image_path)
                 gt_path = name + f"_gt_k{self.config.k}" + ext
-                gt_pair = np.load(image_path)
+                gt_pair = np.load(gt_path)
                 gt1 = gt_pair[0]
                 gt2 = gt_pair[1]
             else:

@@ -51,7 +51,11 @@ def train_3d(args, data_loader, run_dir, writer=None):
     if 'cluster' in args.model:
         # Generate colors for cluster masks
         palette = sns.color_palette(palette='bright', n_colors=args.k)
-        colors = torch.Tensor([list(color) for color in palette]).cpu()  # cpu because we apply it on a detached tensor later
+        colors = torch.Tensor([list(color) for color in palette])
+        if args.cpu:
+            colors = colors.cpu()
+        else:
+            colors = colors.cuda()
 
     torch.backends.cudnn.deterministic = True
 
@@ -111,35 +115,26 @@ def train_3d(args, data_loader, run_dir, writer=None):
             print("==> Validating...")
             
             # Validate
-            row_pred_all = val_cluster_inner(args, epoch, val_loader, model, colors)  # Array of a row for each scale to add to the grid of each scale
+            grid_pred = val_cluster_inner(args, epoch, val_loader, model, colors)  # Array of a row for each scale to add to the grid of each scale
             
-            # Add row to corresponding grid for each scale
-            if len(grid_pred_all) == 0:
-                grid_pred_all = row_pred_all
-            else:
-                for i in range(len(row_pred_all)):
-                    grid_pred_all[i].extend(row_pred_all[i])
-            
-            n_scales = len(grid_pred_all)
             n_cols = min(10,args.b)
-            n_rows = len(grid_pred_all[0]) // n_cols
+            n_rows = len(grid_pred) // n_cols
             
             # Plot for every scale its grid of predictions for sampled epochs up to now
-            for sc in range(n_scales):
-                fig, axes = plt.subplots(n_rows, n_cols, figsize=(15, 15*(n_rows/n_cols)))
-                for i, ax in enumerate(axes.flat):
-                    ax.imshow(grid_pred_all[sc][i]) 
-                    ax.axis('off')  # Turn off axis labels
-                    if i % n_cols:
-                        ax.set_ylabel(f'Epoch {epoch}', rotation=0, size='large')
-                plt.tight_layout()  # Adjust spacing between subplots
-                # Save grid to buffer and then log on tensorboard
-                buf = io.BytesIO()
-                plt.savefig(buf, format='png', bbox_inches='tight', dpi=100)
-                buf.seek(0)
-                grid = PIL.Image.open(buf)
-                grid = t.pil_to_tensor(grid)
-                writer.add_image(f'img/val/grid_{sc}', img_tensor=grid, global_step=epoch)
+            fig, axes = plt.subplots(n_rows, n_cols, figsize=(15, 15*(n_rows/n_cols)))
+            for i, ax in enumerate(axes.flat):
+                ax.imshow(grid_pred[i]) 
+                ax.axis('off')  # Turn off axis labels
+                if i % n_cols:
+                    ax.set_ylabel(f'Epoch {epoch}', rotation=0, size='large')
+            plt.tight_layout()  # Adjust spacing between subplots
+            # Save grid to buffer and then log on tensorboard
+            buf = io.BytesIO()
+            plt.savefig(buf, format='png', bbox_inches='tight', dpi=100)
+            buf.seek(0)
+            grid = PIL.Image.open(buf)
+            grid = t.pil_to_tensor(grid)
+            writer.add_image(f'img/val/grid', img_tensor=grid, global_step=epoch)
 
         # Save model
         if epoch % 100 == 0 or epoch == 240:
@@ -325,10 +320,9 @@ def train_cluster_inner(args, epoch, train_loader, model, optimizer, writer, col
                 pred1 = pred1.permute(2,0,1)
                 gt1 = gt1.permute(2,0,1)
                 if args.cluster_loss == 'ce':
-                    # Convert to numpy
-                    in_img = in1.cpu().detach().numpy()
-                    pred_img = pred1.cpu().detach().numpy()
-                    gt_img = gt1.cpu().detach().numpy()            
+                    in_img = in1
+                    pred_img = pred1
+                    gt_img = gt1
 
                 # Do everything again for the other crop if using swav loss
                 if args.cluster_loss == 'swav':
@@ -350,19 +344,19 @@ def train_cluster_inner(args, epoch, train_loader, model, optimizer, writer, col
                     pred2 = f.pad(pred2.unsqueeze(0),(1,2,2,2),value=1)
                     gt1 = f.pad(gt1.unsqueeze(0),(2,1,2,2),value=1)
                     gt2 = f.pad(gt2.unsqueeze(0),(1,2,2,2),value=1)
-                    # Combine crops and convert to numpy
-                    in_img = torch.cat((in1,in2),dim=3).squeeze(0).cpu().detach().numpy()
-                    pred_img = torch.cat((pred1,pred2),dim=3).squeeze(0).cpu().detach().numpy()
-                    gt_img = torch.cat((gt1,gt2),dim=3).squeeze(0).cpu().detach().numpy()
+                    # Combine crops
+                    in_img = torch.cat((in1,in2),dim=3).squeeze(0)
+                    pred_img = torch.cat((pred1,pred2),dim=3).squeeze(0)
+                    gt_img = torch.cat((gt1,gt2),dim=3).squeeze(0)
 
                 # Save in tensorboard
                 in_img_name = 'img/train/raw' 
                 pred_img_name = f'img/train/pred'
                 gt_img_name = f'img/train/gt'
 
-                writer.add_image(in_img_name, img_tensor=in_img, global_step=epoch, dataformats='CHW')
-                writer.add_image(pred_img_name, img_tensor=pred_img, global_step=epoch, dataformats='CHW')   
-                writer.add_image(gt_img_name, img_tensor=gt_img, global_step=epoch, dataformats='CHW')
+                writer.add_image(in_img_name, img_tensor=in_img.cpu().detach().numpy(), global_step=epoch, dataformats='CHW')
+                writer.add_image(pred_img_name, img_tensor=pred_img.cpu().detach().numpy(), global_step=epoch, dataformats='CHW')   
+                writer.add_image(gt_img_name, img_tensor=gt_img.cpu().detach().numpy(), global_step=epoch, dataformats='CHW')
 
         # TODO: add the other losses later
         loss1 = cluster_loss
@@ -418,13 +412,13 @@ def val_cluster_inner(args, epoch, val_loader, model, colors):
 
         model.eval()
 
-        for idx, (image, _, gt, _, _, _, _, _) in enumerate(val_loader):
+        for idx, (image, _, _, _, _, _, _, _) in enumerate(val_loader):
             
             if idx != 0:
                 continue  # Validate only batch 2
 
             B, _, H, W, D = image.shape
-            K = model.module.proto_num
+            K = args.k
 
             # Keep only modality 0
             image = image[:,0:1,:,:,:]
@@ -433,7 +427,6 @@ def val_cluster_inner(args, epoch, val_loader, model, colors):
 
             if not args.cpu:
                 x = x.cuda()
-                gt = gt.cuda()
 
             # Get embeddings and predictions
             _, pred = model(x)
@@ -455,8 +448,6 @@ def val_cluster_inner(args, epoch, val_loader, model, colors):
             for img_idx in range(n_images): # Next, add the predictions for each image at the current epoch as the next row
                 pred_i = pred[img_idx,:,:,:,pred.shape[-1]//2].argmax(dim=0).unsqueeze(0)  # Take only hard cluster assignment (argmax)
                 pred_i = pred_i.repeat((3,1,1)).permute(1,2,0)  # Convert to RGB and move channel dim to the end
-                pred_i = pred_i.cpu().detach() # Send pred and color tensors to cpu
-                colors = colors.cpu()
                 for c in range(colors.shape[0]):  # Give color to each cluster in cluster masks
                     pred_i[pred_i[:,:,0] == c] = colors[c]
                 pred_i = pred_i.cpu().detach()

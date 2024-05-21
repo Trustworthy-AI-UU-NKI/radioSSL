@@ -142,7 +142,6 @@ if __name__ == '__main__':
                 # color_kmeans.train(clusters)
                 # _, colors = kmeans.index.search(clusters, 3, )
 
-
                 # # Select 2D images
                 # img_idx = 0
                 # m_idx = 0

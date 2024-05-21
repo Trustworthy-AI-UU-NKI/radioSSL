@@ -4,6 +4,7 @@ Training code for C2L
 """
 from __future__ import print_function
 
+import io
 import sys
 import time
 import math
@@ -12,6 +13,7 @@ import PIL
 import numpy as np
 import seaborn as sns
 from matplotlib import pyplot as plt
+
 
 import torch
 import torch.backends.cudnn as cudnn
@@ -83,7 +85,6 @@ def train_3d(args, data_loader, run_dir, writer=None):
         criterion = criterion.cuda()
         cosine = cosine.cuda()
 
-    grid_pred_all = []  # Clustering task predictions to visualize in a grid (epoch X image) for each scale
 
     for epoch in range(0, args.epochs + 1):
 
@@ -108,44 +109,44 @@ def train_3d(args, data_loader, run_dir, writer=None):
 
         # VALIDATION (only for clustering task, just for visualization purposes)
 
-        # n_epochs = min(10,args.epochs+1) # The number of epochs to sample for the grid (10 or all epochs if total less than 10) (+1 because we always run for one extra epoch)
+        n_epochs = min(10,args.epochs+1) # The number of epochs to sample for the grid (10 or all epochs if total less than 10) (+1 because we always run for one extra epoch)
         
-        # if args.vis and ((epoch % ((args.epochs + 1) // (n_epochs - 2))) == 0 or epoch==args.epochs) and 'cluster' in args.model and args.n == 'brats': 
-        #     # TODO: Currently only works for BraTS Clustering
-        #     # The n_epochs - 2 is because we want to sample one less so that we can always add the final epoch in the end regardless of the step, and one less because epoch 0 is always included
+        if args.vis and ((epoch % ((args.epochs + 1) // (n_epochs - 2))) == 0 or epoch==args.epochs) and 'cluster' in args.model and args.n == 'brats': 
+            # TODO: Currently only works for BraTS Clustering
+            # The n_epochs - 2 is because we want to sample one less so that we can always add the final epoch in the end regardless of the step, and one less because epoch 0 is always included
 
-        #     print("==> validating...")
+            print("==> validating...")
             
-        #     # Validate
-        #     row_pred_all = val_cluster_inner(args, epoch, val_loader, model, colors)  # Array of a row for each scale to add to the grid of each scale
+            # Validate
+            row_pred_all = val_cluster_inner(args, epoch, val_loader, model, colors)  # Array of a row for each scale to add to the grid of each scale
             
-        #     # Add row to corresponding grid for each scale
-        #     if len(grid_pred_all) == 0:
-        #         grid_pred_all = row_pred_all
-        #     else:
-        #         for i in range(len(row_pred_all)):
-        #             grid_pred_all[i].extend(row_pred_all[i])
+            # Add row to corresponding grid for each scale
+            if len(grid_pred_all) == 0:
+                grid_pred_all = row_pred_all
+            else:
+                for i in range(len(row_pred_all)):
+                    grid_pred_all[i].extend(row_pred_all[i])
             
-        #     n_scales = len(grid_pred_all)
-        #     n_cols = min(10,args.b)
-        #     n_rows = len(grid_pred_all[0]) // n_cols
+            n_scales = len(grid_pred_all)
+            n_cols = min(10,args.b)
+            n_rows = len(grid_pred_all[0]) // n_cols
             
-        #     # Plot for every scale its grid of predictions for sampled epochs up to now
-        #     for sc in range(n_scales):
-        #         fig, axes = plt.subplots(n_rows, n_cols, figsize=(15, 15*(n_rows/n_cols)))
-        #         for i, ax in enumerate(axes.flat):
-        #             ax.imshow(grid_pred_all[sc][i]) 
-        #             ax.axis('off')  # Turn off axis labels
-        #             if i % n_cols:
-        #                 ax.set_ylabel(f'Epoch {epoch}', rotation=0, size='large')
-        #         plt.tight_layout()  # Adjust spacing between subplots
-        #         # Save grid to buffer and then log on tensorboard
-        #         buf = io.BytesIO()
-        #         plt.savefig(buf, format='png', bbox_inches='tight', dpi=100)
-        #         buf.seek(0)
-        #         grid = PIL.Image.open(buf)
-        #         grid = t.pil_to_tensor(grid)
-        #         writer.add_image(f'img/val/grid_{sc}', img_tensor=grid, global_step=epoch)
+            # Plot for every scale its grid of predictions for sampled epochs up to now
+            for sc in range(n_scales):
+                fig, axes = plt.subplots(n_rows, n_cols, figsize=(15, 15*(n_rows/n_cols)))
+                for i, ax in enumerate(axes.flat):
+                    ax.imshow(grid_pred_all[sc][i]) 
+                    ax.axis('off')  # Turn off axis labels
+                    if i % n_cols:
+                        ax.set_ylabel(f'Epoch {epoch}', rotation=0, size='large')
+                plt.tight_layout()  # Adjust spacing between subplots
+                # Save grid to buffer and then log on tensorboard
+                buf = io.BytesIO()
+                plt.savefig(buf, format='png', bbox_inches='tight', dpi=100)
+                buf.seek(0)
+                grid = PIL.Image.open(buf)
+                grid = t.pil_to_tensor(grid)
+                writer.add_image(f'img/val/grid_{sc}', img_tensor=grid, global_step=epoch)
 
         # Save model
         if epoch % 100 == 0 or epoch == 240:
@@ -196,7 +197,7 @@ def train_pcrlv2_inner(args, epoch, train_loader, model, optimizer, scaler, crit
 
         # Get predictions
         mask1, decoder_outputs1, middle_masks1 = model(x1)
-        mask2, decoder_outputs2, _ = model(x2)
+        _, decoder_outputs2, _ = model(x2)
 
         loss2, index2 = cos_loss(cosine, decoder_outputs1, decoder_outputs2)
         local_loss = 0.0
@@ -289,16 +290,19 @@ def train_cluster_inner(args, epoch, train_loader, model, optimizer, scaler, wri
             crop1_coords = crop1_coords.cuda()
             crop2_coords = crop2_coords.cuda()
 
-        device_type = 'cpu' if args.cpu else 'cuda'
-        with autocast(device_type=device_type):  # Run in mixed-precision
+        # device_type = 'cpu' if args.cpu else 'cuda'
+        # with autocast(device_type=device_type):  # Run in mixed-precision
 
-            # Get cluster predictions from student U-Net
-            pred1 = model.module(x1)
-            pred2 = model.module(x2)
-            
-            # Convert to probabilities
-            pred1 = pred1.softmax(2)
-            pred2 = pred2.softmax(2)
+        # Get cluster predictions from student U-Net
+        pred1 = model.module(x1)
+        pred2 = model.module(x2)
+        
+        # Convert to probabilities
+        pred1 = pred1.softmax(2)
+        pred2 = pred2.softmax(2)
+
+        gt1 = f.one_hot(gt1).permute(0,4,1,2,3)  # B x H x W x D -> B x H x W x D x K -> B x K x H x W x D
+        gt2 = f.one_hot(gt2).permute(0,4,1,2,3)
             
         # ROI-align crop intersection with cluster assignment intersection
         roi_pred1, roi_pred2, roi_gt1, roi_gt2 = roi_align_intersect(pred1, pred2, gt1, gt2, crop1_coords, crop2_coords)
@@ -429,8 +433,8 @@ def val_cluster_inner(args, epoch, val_loader, model, colors):
 
     with torch.no_grad():
 
-        # This array is for plotting a grid epoch X image for each scale:
-        # Each row contains the predicted cluster assignments of a specific scale for each image in the current epoch
+        # This array is for plotting a grid epoch X image
+        # Each row contains the predicted cluster assignments for each image in the current epoch
         grid_pred_all = []  
 
         model.eval()
@@ -453,50 +457,34 @@ def val_cluster_inner(args, epoch, val_loader, model, colors):
                 gt = gt.cuda()
 
             # Get embeddings and predictions
-            _, pred_all = model(x)
+            _, pred = model(x)
 
-            n_scales = len(pred_all)
-            for sc in range(n_scales):  # For each scale
+            grid_pred = []  # Contains the grid predictions of a specific scale
 
-                grid_pred = []  # Contains the grid predictions of a specific scale
+            # Convert to probabilities
+            pred = pred.softmax(2)
 
-                N = model.module.patch_num[sc]
-                PH, PW, PD = model.module.patch_dim[sc]
-
-                pred = pred_all[sc]
-
-                # Convert to probabilities
-                pred = pred.softmax(2)
-
-                # Convert prediction to (soft) cluster masks (restore spatial position of pooled image)
-                NPH = H//PH  # Num patches at X
-                NPW = W//PW  # Num patches at Y
-                NPD = D//PD  # Num patches at Z
-                pred = pred.permute(0,2,1).reshape((B,K,NPH,NPW,NPD))
-
-                # Gather predictions to visualize on grid
-                n_images = min(10,args.b)  # The number of images to sample from for the grid (10 or all images if total less than 10)
-                if epoch == 0:  # If first epoch, add the input images as the first row of the grid
-                    for img_idx in range(n_images):
-                        x_i = x[img_idx,0,:,:,D//2]                   
-                        x_i = (x_i - x_i.min())/(x_i.max() - x_i.min())  # Min-max norm input images
-                        x_i = x_i.repeat((3,1,1)).permute(1,2,0)  # Convert to RGB and move channel dim to the end
-                        x_i = x_i.cpu().detach()
-                        grid_pred.append(x_i)
-                for img_idx in range(n_images): # Next, add the predictions for each image at the current epoch as the next row
-                    pred_i = pred[img_idx,:,:,:,NPD//2].argmax(dim=0).unsqueeze(0)  # Take only hard cluster assignment (argmax)
-                    pred_i = f.interpolate(pred_i.float().unsqueeze(0), size=(H,W)).squeeze(0)  # Interpolate cluster masks to original input shape
-                    pred_i = pred_i.repeat((3,1,1)).permute(1,2,0)  # Convert to RGB and move channel dim to the end
-                    pred_i = pred_i.cpu().detach() # Send pred and color tensors to cpu
-                    colors = colors.cpu()
-                    for c in range(colors.shape[0]):  # Give color to each cluster in cluster masks
-                        pred_i[pred_i[:,:,0] == c] = colors[c]
-                    pred_i = pred_i.cpu().detach()
-                    grid_pred.append(pred_i)
+            # Gather predictions to visualize on grid
+            n_images = min(10,args.b)  # The number of images to sample from for the grid (10 or all images if total less than 10)
+            if epoch == 0:  # If first epoch, add the input images as the first row of the grid
+                for img_idx in range(n_images):
+                    x_i = x[img_idx,0,:,:,D//2]                   
+                    x_i = (x_i - x_i.min())/(x_i.max() - x_i.min())  # Min-max norm input images
+                    x_i = x_i.repeat((3,1,1)).permute(1,2,0)  # Convert to RGB and move channel dim to the end
+                    x_i = x_i.cpu().detach()
+                    grid_pred.append(x_i)
+            for img_idx in range(n_images): # Next, add the predictions for each image at the current epoch as the next row
+                pred_i = pred[img_idx,:,:,:,pred.shape[-1]//2].argmax(dim=0).unsqueeze(0)  # Take only hard cluster assignment (argmax)
+                pred_i = f.interpolate(pred_i.float().unsqueeze(0), size=(H,W)).squeeze(0)  # Interpolate cluster masks to original input shape
+                pred_i = pred_i.repeat((3,1,1)).permute(1,2,0)  # Convert to RGB and move channel dim to the end
+                pred_i = pred_i.cpu().detach() # Send pred and color tensors to cpu
+                colors = colors.cpu()
+                for c in range(colors.shape[0]):  # Give color to each cluster in cluster masks
+                    pred_i[pred_i[:,:,0] == c] = colors[c]
+                pred_i = pred_i.cpu().detach()
+                grid_pred.append(pred_i)
                 
-                grid_pred_all.append(grid_pred)
-
-    return grid_pred_all
+    return grid_pred
 
 
 def train_cluster_3d(args, data_loader, run_dir, writer=None):

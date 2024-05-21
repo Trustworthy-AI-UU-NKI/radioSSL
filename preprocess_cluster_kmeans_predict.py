@@ -15,6 +15,7 @@ import torch.nn.functional as f
 from torch import autocast
 
 from faiss import Kmeans
+import faiss.contrib.torch_utils
 
 from data import DataGenerator
 from tools import set_seed
@@ -71,10 +72,12 @@ if __name__ == '__main__':
     featup.eval()
 
     # Predict with K-Means --------------------------------------------------------------------------------------------------------------
-    print('Predict clusters with K-Means...')
+    print('Predict clusters with K-Means...\n')
 
     with tqdm(total=len(train_loader)) as tqdm_progress:
         for idx, (input1, input2, _, _, _, _, _, index) in enumerate(train_loader):
+
+            print(f'Iteration {idx}/{len(train_loader)}', flush=True)
 
             input1 = input1.float()
             input2 = input2.float()
@@ -90,14 +93,17 @@ if __name__ == '__main__':
 
             with torch.no_grad():
                 
+                print('     Featup', flush=True)
                 # Get upsampled features from teacher DINO ViT16 encoder and flatten spatial dimensions to get feature vectors for each pixel
                 # B*D x 1 x H x W -(RGB)->  B*D x 3 x H x W -(Featup)-> B*D x C' x H x W -(Vectorize)-> B*D*H*W x C' 
-                feat_vec1 = torch.zeros((B*D,384,H,W))
-                feat_vec2 = torch.zeros((B*D,384,H,W))
-                MB = 4 # Mini-batch size (to work on my local machine)
-                for b_idx in tqdm(range(0,B*D,MB), leave=False):  
-                    feat_vec1[b_idx:b_idx+MB] = featup.module(x1[b_idx:b_idx+MB].repeat(1,3,1,1))
-                    feat_vec2[b_idx:b_idx+MB] = featup.module(x2[b_idx:b_idx+MB].repeat(1,3,1,1))
+                # feat_vec1 = torch.zeros((B*D,384,H,W))
+                # feat_vec2 = torch.zeros((B*D,384,H,W))
+                # MB = 4 # Mini-batch size (to work on my local machine)
+                # for b_idx in tqdm(range(0,B*D,MB), leave=False):  
+                #     feat_vec1[b_idx:b_idx+MB] = featup.module(x1[b_idx:b_idx+MB].repeat(1,3,1,1))
+                #     feat_vec2[b_idx:b_idx+MB] = featup.module(x2[b_idx:b_idx+MB].repeat(1,3,1,1))
+                feat_vec1 = featup.module(x1.repeat(1,3,1,1))
+                feat_vec2 = featup.module(x2.repeat(1,3,1,1))
                 feat_vec1 = feat_vec1.permute(0,2,3,1).flatten(0,2)
                 feat_vec2 = feat_vec2.permute(0,2,3,1).flatten(0,2)
 
@@ -105,7 +111,8 @@ if __name__ == '__main__':
                 K = args.k
                 N, E = feat_vec1.shape  # Number of points, Feature vector size
 
-                kmeans.train(feat_vec1, init_centroids=centroids)  # Dummy train for loading pretrained centroids
+                print(      'K-Means', flush=True)
+                kmeans.train(feat_vec1.cpu().numpy(), init_centroids=centroids)  # Dummy train for loading pretrained centroids
                 _, gt_vec1 = kmeans.index.search(feat_vec1.cpu().numpy(), 1)
                 _, gt_vec2 = kmeans.index.search(feat_vec2.cpu().numpy(), 1)
 
@@ -116,8 +123,8 @@ if __name__ == '__main__':
                     gt_vec2 = gt_vec2.cuda()
 
                 # Restore spatial dimensions
-                gt1 = f.one_hot(gt_vec1).reshape(B, D, H, W, K).permute(0,4,2,3,1)  # B*D*H*W -> B*D*H*W x K -> B x D x H x W x K -> B x K x H x W x D
-                gt2 = f.one_hot(gt_vec2).reshape(B, D, H, W, K).permute(0,4,2,3,1)
+                gt1 = gt_vec1.reshape(B, D, H, W).permute(0,2,3,1)  # B*D*H*W -> B x D x H x W -> B x H x W x D
+                gt2 = gt_vec2.reshape(B, D, H, W).permute(0,2,3,1)
 
                 # Save ground truth files
                 index = index.tolist()
@@ -175,4 +182,3 @@ if __name__ == '__main__':
                 # gt_img = torch.cat((gt1_img,gt2_img),dim=3).squeeze(0).cpu().detach().numpy()
 
                 # test=123
-

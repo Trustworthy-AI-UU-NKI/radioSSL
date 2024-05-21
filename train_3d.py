@@ -279,6 +279,8 @@ def train_cluster_inner(args, epoch, train_loader, model, optimizer, writer, col
         if not args.cpu:
             x1 = x1.cuda()
             x2 = x2.cuda()
+            gt1 = gt1.cuda()
+            gt2 = gt2.cuda()
             crop1_coords = crop1_coords.cuda()
             crop2_coords = crop2_coords.cuda()
 
@@ -315,13 +317,13 @@ def train_cluster_inner(args, epoch, train_loader, model, optimizer, writer, col
                 # Min-max norm input images
                 in1 = (in1 - in1.min())/(in1.max() - in1.min())
                 # Give color to each cluster in cluster masks
-                pred1 = pred1.repeat((3,1,1)).permute(1,2,0)  # Convert to RGB and move channel dim to the end
-                gt1 = gt1.repeat((3,1,1)).permute(1,2,0)
+                pred1 = pred1.repeat((3,1,1)).permute(1,2,0).float()  # Convert to RGB and move channel dim to the end
+                gt1 = gt1.repeat((3,1,1)).permute(1,2,0).float()
                 for c in range(colors.shape[0]):
                     pred1[pred1[:,:,0] == c] = colors[c]
                     gt1[gt1[:,:,0] == c] = colors[c]
-                pred1 = pred1.permute(2,1,0)
-                gt1 = gt1.permute(2,1,0)
+                pred1 = pred1.permute(2,0,1)
+                gt1 = gt1.permute(2,0,1)
                 if args.cluster_loss == 'ce':
                     # Convert to numpy
                     in_img = in1.cpu().detach().numpy()
@@ -334,16 +336,13 @@ def train_cluster_inner(args, epoch, train_loader, model, optimizer, writer, col
                     pred2 = pred2[img_idx,:,:,:,s_idx].argmax(dim=0).unsqueeze(0)
                     gt2 = gt2[img_idx,:,:,:,s_idx].argmax(dim=0).unsqueeze(0)
                     in2 = (in2 - in2.min())/(in2.max() - in2.min())
-                    in2 = in2.cpu().detach()
-                    pred2 = pred2.cpu().detach()
-                    gt2 = gt2.cpu().detach()
-                    pred2 = pred2.repeat((3,1,1)).permute(1,2,0)
-                    gt2 = gt2.repeat((3,1,1)).permute(1,2,0)
+                    pred2 = pred2.repeat((3,1,1)).permute(1,2,0).float()
+                    gt2 = gt2.repeat((3,1,1)).permute(1,2,0).float()
                     for c in range(colors.shape[0]):
                         pred2[pred2[:,:,0] == c] = colors[c]
                         gt2[gt2[:,:,0] == c] = colors[c]
-                    pred2 = pred2.permute(2,1,0)
-                    gt2 = gt2.permute(2,1,0)
+                    pred2 = pred2.permute(2,0,1)
+                    gt2 = gt2.permute(2,0,1)
                     # Pad images for better visualization                
                     in1 = f.pad(in1.unsqueeze(0),(2,1,2,2),value=1)
                     in2 = f.pad(in2.unsqueeze(0),(1,2,2,2),value=1)

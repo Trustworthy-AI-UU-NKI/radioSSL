@@ -649,10 +649,11 @@ def roi_align_intersect(pred1, pred2, gt1, gt2, box1, box2):
     z2_2 = z2-box2[:,4]
 
     # Align
-    roi_pred1 = torch.zeros(size=pred1.shape)
-    roi_pred2 = torch.zeros(size=pred2.shape)
-    roi_gt1 = torch.zeros(size=gt1.shape)
-    roi_gt2 = torch.zeros(size=gt2.shape)
+    device = pred1.device
+    roi_pred1 = torch.zeros(size=pred1.shape).to(device)
+    roi_pred2 = torch.zeros(size=pred2.shape).to(device)
+    roi_gt1 = torch.zeros(size=gt1.shape).to(device)
+    roi_gt2 = torch.zeros(size=gt2.shape).to(device)
     for b_idx in range(B):
         roi_pred1[b_idx] = F.interpolate(pred1[b_idx, :, x1_1[b_idx]:x1_2[b_idx], y1_1[b_idx]:y1_2[b_idx], z1_1[b_idx]:z1_2[b_idx]].unsqueeze(0), size=(H,W,D))
         roi_pred2[b_idx] = F.interpolate(pred2[b_idx, :, x2_1[b_idx]:x2_2[b_idx], y2_1[b_idx]:y2_2[b_idx], z2_1[b_idx]:z2_2[b_idx]].unsqueeze(0), size=(H,W,D))

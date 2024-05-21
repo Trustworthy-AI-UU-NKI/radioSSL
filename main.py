@@ -29,6 +29,7 @@ if __name__ == '__main__':
     parser.add_argument('--d', default=3, type=int, help='3D or 2D to run')
     parser.add_argument('--workers', default=4, type=int, help='Num of workers')
     parser.add_argument('--gpus', default='0,1,2,3', type=str, help='GPU indices to use')
+    parser.add_argument('--cluster_loss', default='ce', choices=['ce', 'swav'], type=str, help='Choose clustering pretraining loss: cross-entropy or swav')
     parser.add_argument('--ratio', default=1, type=float, help='Ratio of data used for pretraining/finetuning.')
     parser.add_argument('--momentum', default=0.9)
     parser.add_argument('--weight', default=None, type=str, help='Diretory to weights to load')

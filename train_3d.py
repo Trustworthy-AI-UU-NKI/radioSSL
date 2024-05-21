@@ -22,7 +22,7 @@ import torch.nn.functional as f
 import torchvision.transforms.functional as t
 
 from models import PCRLv23d, Cluster3d, TraceWrapper
-from tools import adjust_learning_rate, AverageMeter, sinkhorn, swav_loss, roi_align_intersect
+from tools import adjust_learning_rate, AverageMeter, sinkhorn, ce_loss, swav_loss, roi_align_intersect
 
 
 def Normalize(x):
@@ -282,25 +282,23 @@ def train_cluster_inner(args, epoch, train_loader, model, optimizer, writer, col
             crop1_coords = crop1_coords.cuda()
             crop2_coords = crop2_coords.cuda()
 
-        # device_type = 'cpu' if args.cpu else 'cuda'
-        # with autocast(device_type=device_type):  # Run in mixed-precision
+        pred1 = model.module(x1)  # Get cluster predictions
+        pred1 = pred1.softmax(2)  # Convert to probabilities
+        gt1 = f.one_hot(gt1.long(), num_classes=args.k).permute(0,4,1,2,3)  # B x H x W x D -> B x H x W x D x K -> B x K x H x W x D
 
-        # Get cluster predictions from student U-Net
-        pred1 = model.module(x1)
-        pred2 = model.module(x2)
-        
-        # Convert to probabilities
-        pred1 = pred1.softmax(2)
-        pred2 = pred2.softmax(2)
+        # Do everything again for the other crop if using swav loss
+        if args.cluster_loss == 'swav':
+            pred2 = model.module(x2)
+            pred2 = pred2.softmax(2)
+            gt2 = f.one_hot(gt2.long(), num_classes=args.k).permute(0,4,1,2,3)
+            # ROI-align crop intersection with cluster assignment intersection
+            roi_pred1, roi_pred2, roi_gt1, roi_gt2 = roi_align_intersect(pred1, pred2, gt1, gt2, crop1_coords, crop2_coords)
 
-        gt1 = f.one_hot(gt1.long()).permute(0,4,1,2,3)  # B x H x W x D -> B x H x W x D x K -> B x K x H x W x D
-        gt2 = f.one_hot(gt2.long()).permute(0,4,1,2,3)
-            
-        # ROI-align crop intersection with cluster assignment intersection
-        roi_pred1, roi_pred2, roi_gt1, roi_gt2 = roi_align_intersect(pred1, pred2, gt1, gt2, crop1_coords, crop2_coords)
-
-        # SwAV Loss for current scale
-        scale_swav_loss = swav_loss(roi_gt1, roi_gt2, roi_pred1, roi_pred2)
+        # Clustering Loss
+        if args.cluster_loss == 'ce':
+            cluster_loss = ce_loss(gt1, pred1)
+        elif args.cluster_loss == 'swav':
+            cluster_loss = swav_loss(roi_gt1, roi_gt2, roi_pred1, roi_pred2)
 
         # Plot predictions on tensorboard
         with torch.no_grad():
@@ -312,52 +310,53 @@ def train_cluster_inner(args, epoch, train_loader, model, optimizer, writer, col
                 m_idx = 0
                 s_idx = D//2
                 in1 = x1[img_idx,m_idx,:,:,s_idx].unsqueeze(0)
-                in2 = x2[img_idx,m_idx,:,:,s_idx].unsqueeze(0)
                 pred1 = pred1[img_idx,:,:,:,s_idx].argmax(dim=0).unsqueeze(0)  # Take only hard cluster assignment (argmax)
-                pred2 = pred2[img_idx,:,:,:,s_idx].argmax(dim=0).unsqueeze(0)
                 gt1 = gt1[img_idx,:,:,:,s_idx].argmax(dim=0).unsqueeze(0)
-                gt2 = gt2[img_idx,:,:,:,s_idx].argmax(dim=0).unsqueeze(0)
-
                 # Min-max norm input images
                 in1 = (in1 - in1.min())/(in1.max() - in1.min())
-                in2 = (in2 - in2.min())/(in2.max() - in2.min())
-
-                # Send to cpu
-                in1 = in1.cpu().detach()
-                in2 = in2.cpu().detach()
-                pred1 = pred1.cpu().detach()
-                pred2 = pred2.cpu().detach()
-                gt1 = gt1.cpu().detach()
-                gt2 = gt2.cpu().detach()
-
                 # Give color to each cluster in cluster masks
                 pred1 = pred1.repeat((3,1,1)).permute(1,2,0)  # Convert to RGB and move channel dim to the end
-                pred2 = pred2.repeat((3,1,1)).permute(1,2,0)
                 gt1 = gt1.repeat((3,1,1)).permute(1,2,0)
-                gt2 = gt2.repeat((3,1,1)).permute(1,2,0)
                 for c in range(colors.shape[0]):
                     pred1[pred1[:,:,0] == c] = colors[c]
-                    pred2[pred2[:,:,0] == c] = colors[c]
                     gt1[gt1[:,:,0] == c] = colors[c]
-                    gt2[gt2[:,:,0] == c] = colors[c]
                 pred1 = pred1.permute(2,1,0)
-                pred2 = pred2.permute(2,1,0)
                 gt1 = gt1.permute(2,1,0)
-                gt2 = gt2.permute(2,1,0)
+                if args.cluster_loss == 'ce':
+                    # Convert to numpy
+                    in_img = in1.cpu().detach().numpy()
+                    pred_img = pred1.cpu().detach().numpy()
+                    gt_img = gt1.cpu().detach().numpy()            
 
-                # Pad images for better visualization                
-                in1 = f.pad(in1.unsqueeze(0),(2,1,2,2),value=1)
-                in2 = f.pad(in2.unsqueeze(0),(1,2,2,2),value=1)
-                pred1 = f.pad(pred1.unsqueeze(0),(2,1,2,2),value=1)
-                pred2 = f.pad(pred2.unsqueeze(0),(1,2,2,2),value=1)
-                gt1 = f.pad(gt1.unsqueeze(0),(2,1,2,2),value=1)
-                gt2 = f.pad(gt2.unsqueeze(0),(1,2,2,2),value=1)
+                # Do everything again for the other crop if using swav loss
+                if args.cluster_loss == 'swav':
+                    in2 = x2[img_idx,m_idx,:,:,s_idx].unsqueeze(0)
+                    pred2 = pred2[img_idx,:,:,:,s_idx].argmax(dim=0).unsqueeze(0)
+                    gt2 = gt2[img_idx,:,:,:,s_idx].argmax(dim=0).unsqueeze(0)
+                    in2 = (in2 - in2.min())/(in2.max() - in2.min())
+                    in2 = in2.cpu().detach()
+                    pred2 = pred2.cpu().detach()
+                    gt2 = gt2.cpu().detach()
+                    pred2 = pred2.repeat((3,1,1)).permute(1,2,0)
+                    gt2 = gt2.repeat((3,1,1)).permute(1,2,0)
+                    for c in range(colors.shape[0]):
+                        pred2[pred2[:,:,0] == c] = colors[c]
+                        gt2[gt2[:,:,0] == c] = colors[c]
+                    pred2 = pred2.permute(2,1,0)
+                    gt2 = gt2.permute(2,1,0)
+                    # Pad images for better visualization                
+                    in1 = f.pad(in1.unsqueeze(0),(2,1,2,2),value=1)
+                    in2 = f.pad(in2.unsqueeze(0),(1,2,2,2),value=1)
+                    pred1 = f.pad(pred1.unsqueeze(0),(2,1,2,2),value=1)
+                    pred2 = f.pad(pred2.unsqueeze(0),(1,2,2,2),value=1)
+                    gt1 = f.pad(gt1.unsqueeze(0),(2,1,2,2),value=1)
+                    gt2 = f.pad(gt2.unsqueeze(0),(1,2,2,2),value=1)
+                    # Combine crops and convert to numpy
+                    in_img = torch.cat((in1,in2),dim=3).squeeze(0).cpu().detach().numpy()
+                    pred_img = torch.cat((pred1,pred2),dim=3).squeeze(0).cpu().detach().numpy()
+                    gt_img = torch.cat((gt1,gt2),dim=3).squeeze(0).cpu().detach().numpy()
 
-                # Combine crops and save in tensorboard
-                in_img = torch.cat((in1,in2),dim=3).squeeze(0).cpu().detach().numpy()
-                pred_img = torch.cat((pred1,pred2),dim=3).squeeze(0).cpu().detach().numpy()
-                gt_img = torch.cat((gt1,gt2),dim=3).squeeze(0).cpu().detach().numpy()
-
+                # Save in tensorboard
                 in_img_name = 'img/train/raw' 
                 pred_img_name = f'img/train/pred'
                 gt_img_name = f'img/train/gt'
@@ -367,7 +366,7 @@ def train_cluster_inner(args, epoch, train_loader, model, optimizer, writer, col
                 writer.add_image(gt_img_name, img_tensor=gt_img, global_step=epoch, dataformats='CHW')
 
         # TODO: add the other losses later
-        loss1 = scale_swav_loss
+        loss1 = cluster_loss
         loss2 = torch.tensor(0)
         loss4 = 0
         local_loss = 0
@@ -417,10 +416,6 @@ def train_cluster_inner(args, epoch, train_loader, model, optimizer, writer, col
 def val_cluster_inner(args, epoch, val_loader, model, colors):
 
     with torch.no_grad():
-
-        # This array is for plotting a grid epoch X image
-        # Each row contains the predicted cluster assignments for each image in the current epoch
-        grid_pred_all = []  
 
         model.eval()
 

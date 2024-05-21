@@ -70,9 +70,9 @@ def create_logger(args):
         elif args.phase == 'pretask':
             if args.model == 'pcrlv2':
                 sc = "sc_" if args.skip_conn else ""
-                run_name = f'{args.model}_{args.d}d_{sc}pretask_b{args.b}_e{args.epochs}_lr{"{:f}".format(args.lr).split(".")[-1]}_t{curr_time}'
+                run_name = f'{args.model}_{args.d}d_{sc}_pretask_b{args.b}_e{args.epochs}_lr{"{:f}".format(args.lr).split(".")[-1]}_t{curr_time}'
             elif 'cluster' in args.model:
-                run_name = f'{args.model}_{args.d}d_k{args.k}_pretask_b{args.b}_e{args.epochs}_lr{"{:f}".format(args.lr).split(".")[-1]}_t{curr_time}'
+                run_name = f'{args.model}_{args.d}d_k{args.k}_{args.cluster_loss}_pretask_b{args.b}_e{args.epochs}_lr{"{:f}".format(args.lr).split(".")[-1]}_t{curr_time}'
             folder_name = args.model + '_' + args.n + '_pretrain'
         
         if not os.path.exists(os.path.join(args.output,folder_name)):
@@ -575,9 +575,14 @@ def lits_dice_loss(input, target, train=True):
     print(f'loss: {loss}')
     return loss
 
+def ce_loss(gt, out):
+    loss = torch.mean(gt * torch.log(out))
+    return loss
 
 def swav_loss(gt1, gt2, out1, out2):
-    loss = - 0.5 * torch.mean(gt1 * torch.log(out2) + gt2 * torch.log(out1))
+    loss1 = ce_loss(gt1,out2)
+    loss2 = ce_loss(gt2,out1)
+    loss = - 0.5 * (loss1 + loss2)
     return loss
 
 
@@ -644,10 +649,14 @@ def roi_align_intersect(pred1, pred2, gt1, gt2, box1, box2):
     z2_2 = z2-box2[:,4]
 
     # Align
+    roi_pred1 = torch.zeros(size=pred1.shape)
+    roi_pred2 = torch.zeros(size=pred2.shape)
+    roi_gt1 = torch.zeros(size=gt1.shape)
+    roi_gt2 = torch.zeros(size=gt2.shape)
     for b_idx in range(B):
-        pred1[b_idx] = F.interpolate(pred1[b_idx, :, x1_1[b_idx]:x1_2[b_idx], y1_1[b_idx]:y1_2[b_idx], z1_1[b_idx]:z1_2[b_idx]].unsqueeze(0), size=(H,W,D))
-        pred2[b_idx] = F.interpolate(pred2[b_idx, :, x2_1[b_idx]:x2_2[b_idx], y2_1[b_idx]:y2_2[b_idx], z2_1[b_idx]:z2_2[b_idx]].unsqueeze(0), size=(H,W,D))
-        gt1[b_idx] = F.interpolate(gt1[b_idx, :, x1_1[b_idx]:x1_2[b_idx], y1_1[b_idx]:y1_2[b_idx], z1_1[b_idx]:z1_2[b_idx]].unsqueeze(0), size=(H,W,D))
-        gt2[b_idx] = F.interpolate(gt2[b_idx, :, x2_1[b_idx]:x2_2[b_idx], y2_1[b_idx]:y2_2[b_idx], z2_1[b_idx]:z2_2[b_idx]].unsqueeze(0), size=(H,W,D))
+        roi_pred1[b_idx] = F.interpolate(pred1[b_idx, :, x1_1[b_idx]:x1_2[b_idx], y1_1[b_idx]:y1_2[b_idx], z1_1[b_idx]:z1_2[b_idx]].unsqueeze(0), size=(H,W,D))
+        roi_pred2[b_idx] = F.interpolate(pred2[b_idx, :, x2_1[b_idx]:x2_2[b_idx], y2_1[b_idx]:y2_2[b_idx], z2_1[b_idx]:z2_2[b_idx]].unsqueeze(0), size=(H,W,D))
+        roi_gt1[b_idx] = F.interpolate(gt1[b_idx, :, x1_1[b_idx]:x1_2[b_idx], y1_1[b_idx]:y1_2[b_idx], z1_1[b_idx]:z1_2[b_idx]].unsqueeze(0), size=(H,W,D))
+        roi_gt2[b_idx] = F.interpolate(gt2[b_idx, :, x2_1[b_idx]:x2_2[b_idx], y2_1[b_idx]:y2_2[b_idx], z2_1[b_idx]:z2_2[b_idx]].unsqueeze(0), size=(H,W,D))
 
-    return pred1, pred2, gt1, gt2
+    return roi_pred1, roi_pred2, roi_gt1, roi_gt2

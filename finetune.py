@@ -1,3 +1,5 @@
+import io
+import os
 import sys
 
 import numpy as np
@@ -6,9 +8,14 @@ import torch.nn as nn
 import torch.nn.functional as f
 import random
 from copy import deepcopy
+import PIL
+import cv2
 
 from tools import prepare_model, get_loss, dice_coeff
+from torch.utils.tensorboard import SummaryWriter
+import torchvision.transforms.functional as t
 
+from matplotlib import pyplot as plt
 
 
 def train_segmentation(args, dataloader, in_channels, n_classes, run_dir, writer=None):
@@ -46,6 +53,8 @@ def train_segmentation(args, dataloader, in_channels, n_classes, run_dir, writer
     best_loss = 100000
     num_epoch_no_improvement = 0
 
+    grid_pred = []  # Grid for visualizing predictions at each epoch
+
     for epoch in range(0, args.epochs + 1):
         train_losses = []
         valid_losses = []
@@ -69,6 +78,9 @@ def train_segmentation(args, dataloader, in_channels, n_classes, run_dir, writer
             #         writer.add_graph(model, image)
 
             if args.d == 2: # If model is 2D unet, then combine batch and slice dimension and scale input to power of 2
+                # Input dimensions
+                B, M, H, W, D = image.shape
+                _, C, _, _, _ = gt.shape 
                 # Combine batch and slice dim
                 image = image.permute(0,4,1,2,3).reshape(B*D,M,H,W)  # B x M x H x W x D -> B*D x M x H x W
                 gt = gt.permute(0,4,1,2,3).reshape(B*D,C,H,W)
@@ -113,21 +125,44 @@ def train_segmentation(args, dataloader, in_channels, n_classes, run_dir, writer
         with torch.no_grad():
             model.eval()
             print()
-            print("validating....")
+            print("Validating....")
+
+            # Hyperparameters for grid visualization
+            N = 8  # Grid row/col size
+            n_epochs = min(N,args.epochs) # The number of epochs to sample for the grid (N or all epochs if total less than N)
+            step_epochs =  args.epochs // n_epochs # Every how many epochs to sample
+
             for i, (x, y) in enumerate(valid_generator):
+                # TODO: remove
+                # if i != 0:
+                #     continue  # Validate only batch 0
+
                 if not args.cpu:
                     x = x.cuda()
                     y = y.cuda()
                 y = y.float()
 
-                if args.d == 2:
-                    # Input dimensions
-                    B, M, H, W, D = x.shape
-                    _, C, _, _, _ = y.shape 
+                # Input dimensions
+                B, M, H, W, D = x.shape
+                _, C, _, _, _ = y.shape 
 
+                if args.d == 2:
                     # Combine batch and slice dim
                     x = x.permute(0,4,1,2,3).flatten(0,1)  # B x M x H x W x D -> B*D x M x H x W
                     y = y.permute(0,4,1,2,3).flatten(0,1)
+
+                # TODO: remove
+                #pred = torch.zeros(B,3,H,W,D)
+                # weight_path = '/projects/0/prjs0905/runs/exp_dino_cluster/brats_finetune_cluster_brats_pretrain/cluster_3d_k50_sc_pretrain_encoder_finetune_all_b4_e300_lr001000_r40_t17170160124704056.pt'
+                # if args.cpu:
+                #     state_dict = torch.load(weight_path, map_location=torch.device('cpu'))['state_dict']
+                # else:
+                #     state_dict = torch.load(weight_path)['state_dict']
+                # tmp_state_dict = {}
+                # for key in state_dict.keys():
+                #     tmp_state_dict["module." + key] = state_dict[key]
+                # state_dict = tmp_state_dict
+                # model.load_state_dict(state_dict)
 
                 pred = model(x)
 
@@ -136,8 +171,76 @@ def train_segmentation(args, dataloader, in_channels, n_classes, run_dir, writer
                     y = y.reshape(B,D,C,H,W).permute(0,2,3,4,1)
                     pred = f.sigmoid(pred.reshape(B,D,C,H,W).permute(0,2,3,4,1))  # Also apply sigmoid because the 2D model doesn't
 
+                # Calculate loss
                 loss = criterion(pred, y)
                 valid_losses.append(round(loss.item(),4))
+
+                # Gather predictions to visualize on grid
+                if args.vis and (epoch % step_epochs == 0) and (epoch / step_epochs) <= n_epochs and i==0:  
+                    n_images = min(N,args.b)  # The number of images to sample from for the grid (N or all images if total less than N)
+                    if epoch == 0:  # If epoch 0, add the input images and ground truth as two first rows of the grid
+                        for img_idx in range(n_images):
+                            slice_idx = [100, 40, 55, 85]
+                            # Input
+                            x_i = x[img_idx,0,:,:,slice_idx[img_idx]]                   
+                            x_i = (x_i - x_i.min())/(x_i.max() - x_i.min())  # Min-max norm input images
+                            x_i = x_i.repeat((3,1,1)).permute(1,2,0)  # Convert to RGB and move channel dim to the end
+                            x_i = x_i.cpu().detach().numpy()
+                            # Ground truth segmentation mask
+                            y_i = y[img_idx,:,:,:,slice_idx[img_idx]] 
+                            y_i = y_i.permute(1,2,0)
+                            if y_i.shape[-1] != 3:  # If not already RGB convert to RGB with red color for mask
+                                temp_y_i = torch.zeros((y_i.shape[0], y_i.shape[1], 3))
+                                temp_y_i[y_i==1] = [1, 0, 0]
+                                y_i = temp_y_i
+                            y_i = y_i.cpu().detach().numpy()
+                            # Apply segmentation mask on image
+                            if args.n == 'brats':
+                                y_i[np.all(y_i==[1,0,0], axis=-1)] = [0,1,0]  # Convert red to green (WT)
+                                y_i[np.all(y_i==[1,1,1], axis=-1)] = [0,0,1]  # Convert white to blue (ET)
+                                y_i[np.all(y_i==[1,1,0], axis=-1)] = [1,0,0]  # Convert yellow to red (TC)
+                            alpha_x_i = 1 - x_i
+                            mask_i = np.expand_dims((np.sum(y_i,axis=2)!=0),2).repeat(3, axis=2)
+                            blend_x_y_i = cv2.addWeighted(x_i, 0.4, y_i, 0.6, 0)  # Add trasnparency to seg. mask
+                            masked_x_y_i = np.where(mask_i!=[0,0,0], blend_x_y_i, x_i)  # Apply seg. mask
+                            x_y_i = x_i * alpha_x_i + masked_x_y_i * (1 - alpha_x_i)  # Reapply shadows
+                            grid_pred.append(x_y_i)
+                    else:
+                        for img_idx in range(n_images): # If next epochs, add the predictions for each image at the current epoch as the next row
+                            pred_i = pred[img_idx,:,:,:,slice_idx[img_idx]]
+                            pred_i = pred_i.permute(1,2,0)
+                            pred_i = pred_i.cpu().detach().numpy()
+                            if args.n == 'brats':
+                                temp_pred_i = np.zeros(pred_i.shape)
+                                # temp_pred_i[pred_i[:,:,0]>=0.5] = [0,1,0]  # WT
+                                # temp_pred_i[pred_i[:,:,2]>=0.5] = [0,0,1]  # ET
+                                # temp_pred_i[pred_i[:,:,1]>=0.5] = [1,0,0]  # TC
+                                temp_pred_i[:,:,1] = np.fmax(0, pred_i[:,:,0] - pred_i[:,:,1]) # WT  (Because the more red {TC} we have the less green {WT} we want)
+                                temp_pred_i[:,:,2] = np.fmax(0, pred_i[:,:,2])  # ET
+                                temp_pred_i[:,:,0] = np.fmax(0,pred_i[:,:,1] - pred_i[:,:,2]) # TC  (Because the more blue {ET} we have the less red {TC}} we want)
+ 
+                                pred_i = temp_pred_i
+
+                            grid_pred.append(pred_i)
+                
+            # Plot grid of predictions for sampled epochs up to now
+            if args.vis and (epoch % step_epochs == 0) and (epoch / step_epochs) <= n_epochs:
+                n_cols = min(N,args.b)
+                n_rows = len(grid_pred) // n_cols
+                fig, axes = plt.subplots(n_rows, n_cols, figsize=(15, 15*(n_rows/n_cols)))
+                for i, ax in enumerate(axes.flat):
+                    ax.imshow(grid_pred[i]) 
+                    ax.axis('off')  # Turn off axis labels
+                    if i % n_cols:
+                        ax.set_ylabel(f'Epoch {epoch}', rotation=0, size='large')
+                plt.tight_layout()  # Adjust spacing between subplots
+                # Save grid to buffer and then log on tensorboard
+                buf = io.BytesIO()
+                plt.savefig(buf, format='png', bbox_inches='tight', dpi=100)
+                buf.seek(0)
+                grid = PIL.Image.open(buf)
+                grid = t.pil_to_tensor(grid)
+                writer.add_image(f'img/val/grid', img_tensor=grid, global_step=epoch)
 
         train_loss = np.average(train_losses)
         valid_loss = np.average(valid_losses)

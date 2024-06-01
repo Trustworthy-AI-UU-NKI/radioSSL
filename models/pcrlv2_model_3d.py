@@ -3,14 +3,14 @@ import torch.nn as nn
 import torch.nn.functional as F
 
 class LUConv(nn.Module):
-    def __init__(self, in_chan, out_chan, act, norm, num_groups):
+    def __init__(self, in_chan, out_chan, act, norm):
         super(LUConv, self).__init__()
         self.conv1 = nn.Conv3d(in_chan, out_chan, kernel_size=3, padding=1)
 
-        if norm == 'bn':
+        if norm == 'bn' or out_chan == 1:
             self.bn1 = nn.BatchNorm3d(num_features=out_chan, momentum=0.1, affine=True)
         elif norm == 'gn':
-            self.bn1 = nn.GroupNorm(num_groups=num_groups, num_channels=out_chan, eps=1e-05, affine=True)
+            self.bn1 = nn.GroupNorm(num_groups=8, num_channels=out_chan, eps=1e-05, affine=True)
         elif norm == 'in':
             self.bn1 = nn.InstanceNorm3d(num_features=out_chan, momentum=0.1, affine=True)
         else:
@@ -33,44 +33,33 @@ class LUConv(nn.Module):
         return out
 
 
-def _make_nConv(in_channel, out_channel, depth, act, norm, num_groups, double_chnnel=False):
+def _make_nConv(in_channel, depth, act, norm, double_chnnel=False):
     if double_chnnel:
-        layer1 = LUConv(in_channel, out_channel, act, norm, num_groups)
-        layer2 = LUConv(out_channel, out_channel, act, norm, num_groups)
+        layer1 = LUConv(in_channel, 32 * (2 ** (depth + 1)), act, norm)
+        layer2 = LUConv(32 * (2 ** (depth + 1)), 32 * (2 ** (depth + 1)), act, norm)
     else:
-        layer1 = LUConv(in_channel, out_channel // 2, act, norm, num_groups)
-        layer2 = LUConv(out_channel // 2, out_channel, act, norm, num_groups)
+        layer1 = LUConv(in_channel, 32 * (2 ** depth), act, norm)
+        layer2 = LUConv(32 * (2 ** depth), 32 * (2 ** depth) * 2, act, norm)
 
     return nn.Sequential(layer1, layer2)
 
 
 class UpTransition(nn.Module):
-    def __init__(self, inChans, outChans, depth, act, norm, skip_conn=False, multi_scale=False):
+    def __init__(self, inChans, outChans, depth, act, norm, skip_conn=False):
         super(UpTransition, self).__init__()
-        self.multi_scale = multi_scale
         self.depth = depth
         self.up_conv = nn.ConvTranspose3d(inChans, outChans, kernel_size=2, stride=2)
-        
-        if self.multi_scale:
-            p = 8  # Scale step (power)
-            channels = 8 ** (depth + 1)
-            num_groups = 4
-        else:
-            p = 2  
-            channels = 32 * (2 ** (depth + 1))
-            num_groups = 8
-
         if skip_conn:
-            self.ops = _make_nConv(inChans + outChans//p, channels, depth, act, norm, num_groups, double_chnnel=True)
+            self.ops = _make_nConv(inChans + outChans//2, depth, act, norm, double_chnnel=True)
         else:
-            self.ops = _make_nConv(outChans, channels, depth, act, norm, num_groups, double_chnnel=True)
-        
+            self.ops = _make_nConv(outChans, depth, act, norm, double_chnnel=True)
+        channels = 32 * (2 ** depth) * 2
         self.bn = nn.BatchNorm1d(channels)
         self.predictor_head = nn.Sequential(nn.Linear(channels, 2 * channels),
                                             nn.BatchNorm1d(2 * channels),
                                             nn.ReLU(inplace=True),
                                             nn.Linear(2 * channels, channels))
-        self.deep_supervision_head = LUConv(channels, 1, 'sigmoid', norm, num_groups)
+        self.deep_supervision_head = LUConv(channels, 1, 'sigmoid', norm)
 
     def forward(self, x, skip_x = None, pretrain=True):
         b = x.shape[0]
@@ -102,16 +91,9 @@ class OutputTransition(nn.Module):
 
 
 class DownTransition(nn.Module):
-    def __init__(self, in_channel, depth, act, norm, multi_scale=False):
+    def __init__(self, in_channel, depth, act, norm):
         super(DownTransition, self).__init__()
-        self.multi_scale = multi_scale
-        if self.multi_scale:
-            out_channel = 8 ** (depth + 1)
-            num_groups = 4
-        else:
-            out_channel = 32 * (2 ** (depth + 1))
-            num_groups = 8
-        self.ops = _make_nConv(in_channel, out_channel, depth, act, norm, num_groups)
+        self.ops = _make_nConv(in_channel, depth, act, norm)
 
     def forward(self, x):
         return self.ops(x)
@@ -228,38 +210,42 @@ class TraceWrapper(torch.nn.Module):
 class SegmentationModel(nn.Module):
     def __init__(self, n_class=1, act='relu', norm='bn', in_channels=1, skip_conn=False):
         super(SegmentationModel, self).__init__()
-        self.scales = [64, 128, 218, 512] 
         self.maxpool = nn.MaxPool3d(2)
-        self.down_tr = nn.ModuleList([DownTransition(scale, i, act, norm) for i, scale in enumerate([in_channels,] + self.scales[:-1])])
+        self.down_tr64 = DownTransition(in_channels, 0, act, norm)
+        self.down_tr128 = DownTransition(64, 1, act, norm)
+        self.down_tr256 = DownTransition(128, 2, act, norm)
+        self.down_tr512 = DownTransition(256, 3, act, norm)
         self.avg_pool = nn.AdaptiveAvgPool3d((1, 1, 1))
-        self.up_tr = nn.ModuleList([UpTransition(scale, scale, i, act, norm, skip_conn=skip_conn) for i, scale in reversed(list(enumerate(self.scales[1:])))])  # Ignore first scale because out_tr deals with it
-        self.out_tr = OutputTransition(self.scales[0], n_class)
+        self.up_tr256 = UpTransition(512, 512, 2, act, norm, skip_conn=skip_conn)
+        self.up_tr128 = UpTransition(256, 256, 1, act, norm, skip_conn=skip_conn)
+        self.up_tr64 = UpTransition(128, 128, 0, act, norm, skip_conn=skip_conn)
+        self.out_tr = OutputTransition(64, n_class)
         self.sigmoid = nn.Sigmoid()
         self.skip_conn = skip_conn
 
     def forward(self, x):
 
-        # Encoder (down transitions)
-        out_down0 = self.down_tr[0](x)
-        out_down1  = self.down_tr[1](self.maxpool(out_down0))
-        out_down2  = self.down_tr[2](self.maxpool(out_down1))
-        out_down3  = self.down_tr[3](self.maxpool(out_down2))
+        # Encoder
+        self.skip_out64 = self.down_tr64(x)
+        self.skip_out128 = self.down_tr128(self.maxpool(self.skip_out64))
+        self.skip_out256 = self.down_tr256(self.maxpool(self.skip_out128))
+        self.out512 = self.down_tr512(self.maxpool(self.skip_out256))
 
-        # Decoder (up transitions)
+        # Decoder
         if self.skip_conn:
-            out_up3 = self.up_tr[0](out_down3, skip_x=out_down2, pretrain=False)
+            out_up_256 = self.up_tr256(self.out512, skip_x=self.skip_out256, pretrain=False)
         else:
-            out_up3 = self.up_tr[0](out_down3, pretrain=False)
+            out_up_256 = self.up_tr256(self.out512, pretrain=False)
         if self.skip_conn:
-            out_up2 = self.up_tr[1](out_down2, skip_x=out_down1, pretrain=False)
+            out_up_128 = self.up_tr128(out_up_256, skip_x=self.skip_out128, pretrain=False)
         else:
-            out_up2 = self.up_tr[1](out_down2, pretrain=False)
+            out_up_128 = self.up_tr128(out_up_256, pretrain=False)
         if self.skip_conn:
-            out_up1 = self.up_tr[2](out_down1, skip_x=out_down0, pretrain=False)
+            out_up_64 = self.up_tr64(out_up_128, skip_x=self.skip_out64, pretrain=False)
         else:
-            out_up1 = self.up_tr[2](out_down1, pretrain=False)
+            out_up_64 = self.up_tr64(out_up_128, pretrain=False)
         
         # Output 
-        out = self.out_tr(out_up1)
+        out = self.out_tr(out_up_64, )
 
         return out

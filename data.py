@@ -135,7 +135,7 @@ class DataGenerator:
 
         train_ds = BratsPretask(args, x_train, train=True, transform=self.cluster_spatial_transforms,
                                      global_transforms=self.cluster_global_transforms, local_transforms=self.cluster_local_transforms, load_gt=load_gt)
-        valid_ds = BratsPretask(args, x_valid, train=False, load_gt=load_gt)
+        valid_ds = BratsPretask(args, x_valid, train=False, load_gt=False)
 
         generator = torch.Generator()
         generator.manual_seed(args.seed)
@@ -183,7 +183,7 @@ class DataGenerator:
 
         train_ds = LitsPretask(args, x_train, train=True, transform=self.cluster_spatial_transforms,
                                      global_transforms=self.cluster_global_transforms, local_transforms=self.cluster_local_transforms, load_gt=load_gt)
-        valid_ds = LitsPretask(args, x_valid, train=False, load_gt=load_gt)  
+        valid_ds = LitsPretask(args, x_valid, train=False, load_gt=False)  
 
         print(f'Train Images {len(x_train)}, Valid Images {len(x_valid)}')
 

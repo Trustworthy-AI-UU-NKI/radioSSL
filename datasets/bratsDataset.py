@@ -105,7 +105,7 @@ class BratsFineTune(Dataset):
         for mode in modes:
             patient_id = os.path.split(patient_dir)[-1]
             volume_path = os.path.join(patient_dir, patient_id + "_" + mode + '.nii.gz')
-            volume = nib.load(volume_path).get_data()
+            volume = nib.load(volume_path).get_fdata()
             if not mode == "seg":
                 volume = self.normalize(volume)  # [0, 1.0]
             volumes.append(volume)  # [h, w, d]

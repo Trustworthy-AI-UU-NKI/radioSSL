@@ -68,11 +68,11 @@ def create_logger(args):
             folder_name =  args.n + '_finetune' + '_' + pretrain_type
         
         elif args.phase == 'pretask':
+            sc = "sc_" if args.skip_conn else ""
             if args.model == 'pcrlv2':
-                sc = "sc_" if args.skip_conn else ""
-                run_name = f'{args.model}_{args.d}d_{sc}_pretask_b{args.b}_e{args.epochs}_lr{"{:f}".format(args.lr).split(".")[-1]}_t{curr_time}'
+                run_name = f'{args.model}_{args.d}d_{sc}pretask_b{args.b}_e{args.epochs}_lr{"{:f}".format(args.lr).split(".")[-1]}_t{curr_time}'
             elif 'cluster' in args.model:
-                run_name = f'{args.model}_{args.d}d_k{args.k}_{args.cluster_loss}_pretask_b{args.b}_e{args.epochs}_lr{"{:f}".format(args.lr).split(".")[-1]}_t{curr_time}'
+                run_name = f'{args.model}_{args.d}d_k{args.k}_{args.cluster_loss}_{sc}pretask_b{args.b}_e{args.epochs}_lr{"{:f}".format(args.lr).split(".")[-1]}_t{curr_time}'
             folder_name = args.model + '_' + args.n + '_pretrain'
         
         if not os.path.exists(os.path.join(args.output,folder_name)):
@@ -162,9 +162,9 @@ def prepare_model(args, in_channels, n_class):
             if args.pretrained == 'encoder' or args.pretrained == 'all':
                 # Load pretrained encoder
                 if args.d == 3:
-                    first_conv_weight = state_dict['down_tr.0.ops.0.conv1.weight']
+                    first_conv_weight = state_dict['down_tr64.ops.0.conv1.weight']
                     first_conv_weight = first_conv_weight.repeat((1, in_channels, 1, 1, 1))
-                    state_dict['down_tr.0.ops.0.conv1.weight'] = first_conv_weight
+                    state_dict['down_tr64.ops.0.conv1.weight'] = first_conv_weight
                     pretrain_dict.update({k: v for k, v in state_dict.items() if
                                 k in model_dict and 'down_tr' in k})
                 elif args.d == 2:
@@ -542,15 +542,7 @@ def dice_coeff(input, target):
     return dice
 
 
-def thor_dice_loss(input, target, train=True):
-    # print(input.shape, target.shape)
-    es_dice = bceDiceLoss(input[:, 0], target[:, 0], train)
-    tra_dice = bceDiceLoss(input[:, 1], target[:, 1], train)
-    aor_dice = bceDiceLoss(input[:, 2], target[:, 2], train)
-    heart_dice = bceDiceLoss(input[:, 3], target[:, 3], train)
-    print(f'label1 dice {es_dice}, label2 dice {tra_dice}, label3 dice{aor_dice}, label4 dice{heart_dice}')
-    return es_dice + tra_dice + aor_dice + heart_dice
-
+# Segmentation Losses
 
 def get_loss(dataset):
     loss_fun_name = dataset + '_dice_loss'
@@ -569,20 +561,22 @@ def brats_dice_loss(input, target, train=True):
     print(f'wt loss: {wt_loss}, tc_loss : {tc_loss}, et_loss: {et_loss}')
     return wt_loss + tc_loss + et_loss
 
-
 def lits_dice_loss(input, target, train=True):
     loss = bceDiceLoss(input, target, train)
     print(f'loss: {loss}')
     return loss
 
+
+# Clustering Losses
+
 def ce_loss(gt, out):
-    loss = torch.mean(gt * torch.log(out))
+    loss = - torch.mean(gt * torch.log(out))
     return loss
 
 def swav_loss(gt1, gt2, out1, out2):
     loss1 = ce_loss(gt1,out2)
     loss2 = ce_loss(gt2,out1)
-    loss = - 0.5 * (loss1 + loss2)
+    loss = 0.5 * (loss1 + loss2)
     return loss
 
 

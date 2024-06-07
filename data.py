@@ -16,7 +16,7 @@ def get_dataloader(args):
         phase = 'finetune'  # Because finetune and test use the same dataloader
     else:
         phase = args.phase
-    if 'cluster' in args.model:  # Cluster models (cluster, cluster_ms) use the same dataloader for the pretask
+    if 'cluster' in args.model:  # Cluster models use the same dataloader for the pretask
         model = 'cluster'
     else:
         model = args.model

@@ -609,7 +609,15 @@ def roi_align_intersect(pred1, pred2, gt1, gt2, box1, box2):
     # Cluster assignments to align for crop 1 and crop 2: pred1, pred2, gt1, gt2
     # Coordinates of the crop bounding box : box1, box2
 
-    # Input Dimensions
+    # Input Crop dimensions (Original, before standardizing to one common size for batchification)
+    H1 = box1[:,1] - box1[:,0]
+    W1 = box1[:,3] - box1[:,2]
+    D1 = box1[:,5] - box1[:,4]
+    H2 = box2[:,1] - box2[:,0]
+    W2 = box2[:,3] - box2[:,2]
+    D2 = box2[:,5] - box2[:,4]
+
+    # Output Dimensions
     B, K, H, W, D = pred1.shape
 
     # Convert to float
@@ -626,21 +634,35 @@ def roi_align_intersect(pred1, pred2, gt1, gt2, box1, box2):
     z1 = torch.maximum(box1[:,4], box2[:,4])
     z2 = torch.minimum(box1[:,5], box2[:,5])
 
-    # Coordinates of intersecting box inside bbox 1
-    x1_1 = x1-box1[:,0]
-    x1_2 = x2-box1[:,0]
-    y1_1 = y1-box1[:,2]
-    y1_2 = y2-box1[:,2]
-    z1_1 = z1-box1[:,4]
-    z1_2 = z2-box1[:,4]
+    # Coordinates of intersecting box inside bbox 1 (percentage coordinates)
+    x1_1 = (x1-box1[:,0]) / H1
+    x1_2 = (x2-box1[:,0]) / H1
+    y1_1 = (y1-box1[:,2]) / W1
+    y1_2 = (y2-box1[:,2]) / W1
+    z1_1 = (z1-box1[:,4]) / D1
+    z1_2 = (z2-box1[:,4]) / D1
 
-    # Coordinates of intersecting box inside bbox 2
-    x2_1 = x1-box2[:,0]
-    x2_2 = x2-box2[:,0]
-    y2_1 = y1-box2[:,2]
-    y2_2 = y2-box2[:,2]
-    z2_1 = z1-box2[:,4]
-    z2_2 = z2-box2[:,4]
+    # Coordinates of intersecting box inside bbox 2 (percentage coordinates)
+    x2_1 = (x1-box2[:,0]) / H2
+    x2_2 = (x2-box2[:,0]) / H2
+    y2_1 = (y1-box2[:,2]) / W2
+    y2_2 = (y2-box2[:,2]) / W2
+    z2_1 = (z1-box2[:,4]) / D2
+    z2_2 = (z2-box2[:,4]) / D2
+
+    # Convert percentage coordinates to coordinates in output
+    x1_1 = (x1_1 * H).int()
+    x1_2 = (x1_2 * H).int()
+    y1_1 = (y1_1 * W).int()
+    y1_2 = (y1_2 * W).int()
+    z1_1 = (z1_1 * D).int()
+    z1_2 = (z1_2 * D).int()
+    x2_1 = (x2_1 * H).int()
+    x2_2 = (x2_2 * H).int()
+    y2_1 = (y2_1 * W).int()
+    y2_2 = (y2_2 * W).int()
+    z2_1 = (z2_1 * D).int()
+    z2_2 = (z2_2 * D).int()
 
     # Align
     device = pred1.device

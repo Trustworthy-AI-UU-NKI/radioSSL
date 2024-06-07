@@ -18,7 +18,7 @@ class BratsPretask(Dataset):
         self.train = train
         self.transform = transform if transform != None else torchio.transforms.Compose([])
         self.global_transforms = global_transforms if global_transforms != None else torchio.transforms.Compose([])
-        self.local_input_enable = (config.model != 'cluster')  # Do not include local_views in dataloader for cluster_pretask (TODO: might change later)
+        self.local_input_enable = ('cluster' not in config.model)  # Do not include local_views in dataloader for cluster pretask (TODO: might change later)
         self.local_transforms = local_transforms if local_transforms != None else torchio.transforms.Compose([])
         self.norm = torchio.transforms.ZNormalization()
         self.load_gt = load_gt

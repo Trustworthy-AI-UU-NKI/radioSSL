@@ -90,7 +90,7 @@ class LitsPretask(Dataset):
 
 class LitsFineTune(Dataset):
     def __init__(self, ct_dir, seg_dir, crop_size=(128, 128, 64), train=False, ratio=1.0):
-        # cropped slices are 64 because our data only has 94 slices (after preprocessing)
+        # cropped slices are 64 because our data only has 94 slices (after downscaling to 0.75)
         self.crop_size = crop_size
         self.train = train
         self.ct_list = os.listdir(ct_dir)

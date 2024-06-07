@@ -107,7 +107,6 @@ class PCRLv23d(nn.Module):
         self.down_tr128 = DownTransition(64, 1, act, norm)
         self.down_tr256 = DownTransition(128, 2, act, norm)
         self.down_tr512 = DownTransition(256, 3, act, norm)
-        self.avg_pool = nn.AdaptiveAvgPool3d((1, 1, 1))
         self.up_tr256 = UpTransition(512, 512, 2, act, norm, skip_conn=skip_conn)
         self.up_tr128 = UpTransition(256, 256, 1, act, norm, skip_conn=skip_conn)
         self.up_tr64 = UpTransition(128, 128, 0, act, norm, skip_conn=skip_conn)
@@ -160,7 +159,6 @@ class Cluster3d(nn.Module):
         self.down_tr128 = DownTransition(64, 1, act, norm)
         self.down_tr256 = DownTransition(128, 2, act, norm)
         self.down_tr512 = DownTransition(256, 3, act, norm)
-        self.avg_pool = nn.AdaptiveAvgPool3d((1, 1, 1))
         self.up_tr256 = UpTransition(512, 512, 2, act, norm, skip_conn=skip_conn)
         self.up_tr128 = UpTransition(256, 256, 1, act, norm, skip_conn=skip_conn)
         self.up_tr64 = UpTransition(128, 128, 0, act, norm, skip_conn=skip_conn)
@@ -196,6 +194,44 @@ class Cluster3d(nn.Module):
         return out
 
 
+class ClusterPatch3d(nn.Module):
+    def __init__(self, in_channels=1, n_clusters=50, act='relu', norm='bn', skip_conn=False, seed=1):
+        super(ClusterPatch3d, self).__init__()
+
+        self.maxpool = nn.MaxPool3d(2)
+        self.down_tr64 = DownTransition(in_channels, 0, act, norm)
+        self.down_tr128 = DownTransition(64, 1, act, norm)
+        self.down_tr256 = DownTransition(128, 2, act, norm)
+        self.down_tr512 = DownTransition(256, 3, act, norm)
+        self.sigmoid = nn.Sigmoid()
+
+        # Clustering Pretask Head
+        self.emb_dim = 64  # E
+        self.proto_num = n_clusters  # K
+        self.cluster_projection_head = nn.Linear(512, self.emb_dim)  # Projection head for each scale
+        self.prototypes = nn.Linear(self.emb_dim, self.proto_num, bias=False)  # Prototypes 
+
+
+    def forward(self, x):
+
+        # Encoder
+        out64 = self.maxpool(self.down_tr64(x))
+        out128 = self.maxpool(self.down_tr128(out64))
+        out256 = self.maxpool(self.down_tr256(out128))
+        out512 = self.down_tr512(out256)
+
+        self.grid_dim = out512.shape[2:]  # Dimensions of grid of patches 
+
+        # Flatten spatial dims HP, WP, DP of feature map (B x CP x HP x WP x DP -> B x CP x NP) and bring channel dim to the end -> (B x NP x CP)
+        feat = out512.flatten(start_dim=2,end_dim=4).permute(0,2,1)
+
+        # Get embeddings and output preds at every scale
+        emb = self.cluster_projection_head(feat)
+        out = self.prototypes(emb)
+
+        return emb, out
+
+
 class TraceWrapper(torch.nn.Module):
     # Wrapper class for PCRLv23D for tracing the model with tensorboard. It's because its forward outputs a tuple and writer.add_graph wants a tensor output
     def __init__(self, model):
@@ -215,7 +251,6 @@ class SegmentationModel(nn.Module):
         self.down_tr128 = DownTransition(64, 1, act, norm)
         self.down_tr256 = DownTransition(128, 2, act, norm)
         self.down_tr512 = DownTransition(256, 3, act, norm)
-        self.avg_pool = nn.AdaptiveAvgPool3d((1, 1, 1))
         self.up_tr256 = UpTransition(512, 512, 2, act, norm, skip_conn=skip_conn)
         self.up_tr128 = UpTransition(256, 256, 1, act, norm, skip_conn=skip_conn)
         self.up_tr64 = UpTransition(128, 128, 0, act, norm, skip_conn=skip_conn)

@@ -29,6 +29,7 @@ if __name__ == '__main__':
                         help='Path to dataset')
     parser.add_argument('--ratio', default=1, type=float, help='Ratio of data used for pretraining/finetuning.')
     parser.add_argument('--model', default='cluster', choices=['cluster'], help='Choose the model')
+    parser.add_argument('--upsampler', default='featup', choices=['featup','interp'], help='Choose the model')
     parser.add_argument('--b', default=16, type=int, help='Batch size')
     parser.add_argument('--b_kmeans', default=16, type=int, help='Batch size of kmeans')
     parser.add_argument('--n', default='luna', choices=['luna', 'lidc', 'brats', 'lits'], type=str, help='Dataset to use')
@@ -93,14 +94,21 @@ if __name__ == '__main__':
                 print('Featup', flush=True)
                 # Get upsampled features from teacher DINO ViT16 encoder and flatten spatial dimensions to get feature vectors for each pixel
                 # B*D x 1 x H x W -(RGB)->  B*D x 3 x H x W -(Featup)-> B*D x C' x H x W -(Vectorize)-> B*D*H*W x C' 
-                feat_vec1 = torch.zeros((B*D,384,H,W))
-                feat_vec2 = torch.zeros((B*D,384,H,W))
-                MB = 8 # Mini-batch size (to work on my local machine)
-                for b_idx in tqdm(range(0,B*D,MB), leave=False):  
-                    feat_vec1[b_idx:b_idx+MB] = featup.module(x1[b_idx:b_idx+MB].repeat(1,3,1,1))
-                    feat_vec2[b_idx:b_idx+MB] = featup.module(x2[b_idx:b_idx+MB].repeat(1,3,1,1))
-                # feat_vec1 = featup.module(x1.repeat(1,3,1,1))
-                # feat_vec2 = featup.module(x2.repeat(1,3,1,1))
+                # feat_vec1 = torch.zeros((B*D,384,H,W))  # C' = 384
+                # feat_vec2 = torch.zeros((B*D,384,H,W))
+                # MB = 8 # Mini-batch size (to work on my local machine)
+                if args.upsampler == 'featup':
+                    # for b_idx in tqdm(range(0,B*D,MB), leave=False):  
+                    #     feat_vec1[b_idx:b_idx+MB] = featup.module(x1[b_idx:b_idx+MB].repeat(1,3,1,1))
+                    #     feat_vec2[b_idx:b_idx+MB] = featup.module(x2[b_idx:b_idx+MB].repeat(1,3,1,1))
+                    feat_vec1 = featup.module(x1.repeat(1,3,1,1))  # Put it through DINO and FeatUP
+                    feat_vec2 = featup.module(x2.repeat(1,3,1,1))
+                elif args.upsampler == 'interp':
+                    # for b_idx in tqdm(range(0,B*D,MB), leave=False): 
+                    #     feat_vec1[b_idx:b_idx+MB] = f.interpolate(featup.module.model(x1[b_idx:b_idx+MB].repeat(1,3,1,1)), size=(H,W), mode='bilinear')
+                    #     feat_vec2[b_idx:b_idx+MB] = f.interpolate(featup.module.model(x2[b_idx:b_idx+MB].repeat(1,3,1,1)),  size=(H,W), mode='bilinear')
+                    feat_vec1 = f.interpolate(featup.module.model(x1.repeat(1,3,1,1)), size=(H,W), mode='bilinear')  # Put it only through DINO and upsample with interpolation
+                    feat_vec2 = f.interpolate(featup.module.model(x2.repeat(1,3,1,1)), size=(H,W), mode='bilinear')
                 feat_vec1 = feat_vec1.permute(0,2,3,1).flatten(0,2)
                 feat_vec2 = feat_vec2.permute(0,2,3,1).flatten(0,2)
 
@@ -110,7 +118,7 @@ if __name__ == '__main__':
 
             tqdm_progress.update(1)
 
-    kmeans_path = os.path.join(args.data,f'kmeans_centroids_k{args.k}.npy')
+    kmeans_path = os.path.join(args.data,f'kmeans_centroids_k{args.k}_{args.upsampler}.npy')
     np.save(kmeans_path,kmeans.centroids)
     print(f'Centroids saved at: {kmeans_path}')
     

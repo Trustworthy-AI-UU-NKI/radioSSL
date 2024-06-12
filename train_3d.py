@@ -167,7 +167,6 @@ def train_pcrlv2_inner(args, epoch, train_loader, model, optimizer, criterion, c
     """
     
     model.train()
-    model.module.featup.eval()
 
     batch_time = AverageMeter()
     data_time = AverageMeter()

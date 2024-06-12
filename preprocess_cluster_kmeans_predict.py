@@ -1,4 +1,5 @@
 import argparse
+from logging import config
 import os
 import warnings
 import sys
@@ -30,6 +31,7 @@ if __name__ == '__main__':
     parser.add_argument('--centroids', default=None, type=float, help='File containing pre-trained k-means centroids')
     parser.add_argument('--ratio', default=1, type=float, help='Ratio of data used for pretraining/finetuning.')
     parser.add_argument('--model', default='cluster', choices=['cluster'], help='Choose the model')
+    parser.add_argument('--upsampler', default='featup', choices=['featup','interp'], help='Choose the model')
     parser.add_argument('--b', default=16, type=int, help='Batch size')
     parser.add_argument('--n', default='luna', choices=['luna', 'lidc', 'brats', 'lits'], type=str, help='Dataset to use')
     parser.add_argument('--workers', default=4, type=int, help='Num of workers')
@@ -53,7 +55,7 @@ if __name__ == '__main__':
 
     # Generate colors for cluster masks
     palette = sns.color_palette(palette='bright', n_colors=args.k)
-    colors = torch.Tensor([list(color) for color in palette]).cpu()  # cpu because we apply it on a detached tensor later
+    colors = torch.Tensor([list(color) for color in palette]).cpu()
 
     # Get dataloader
     generator = DataGenerator(args)
@@ -93,17 +95,24 @@ if __name__ == '__main__':
 
             with torch.no_grad():
                 
-                print('     Featup', flush=True)
+                print('     Upsample', flush=True)
                 # Get upsampled features from teacher DINO ViT16 encoder and flatten spatial dimensions to get feature vectors for each pixel
-                # B*D x 1 x H x W -(RGB)->  B*D x 3 x H x W -(Featup)-> B*D x C' x H x W -(Vectorize)-> B*D*H*W x C' 
-                # feat_vec1 = torch.zeros((B*D,384,H,W))
+                # B*D x 1 x H x W -(RGB)->  B*D x 3 x H x W -(DINO)-> B*D x C' x H' x W' -(Upsampler)-> B*D x C' x H x W -(Vectorize)-> B*D*H*W x C' 
+                # feat_vec1 = torch.zeros((B*D,384,H,W))  # C' = 384
                 # feat_vec2 = torch.zeros((B*D,384,H,W))
                 # MB = 4 # Mini-batch size (to work on my local machine)
-                # for b_idx in tqdm(range(0,B*D,MB), leave=False):  
-                #     feat_vec1[b_idx:b_idx+MB] = featup.module(x1[b_idx:b_idx+MB].repeat(1,3,1,1))
-                #     feat_vec2[b_idx:b_idx+MB] = featup.module(x2[b_idx:b_idx+MB].repeat(1,3,1,1))
-                feat_vec1 = featup.module(x1.repeat(1,3,1,1))
-                feat_vec2 = featup.module(x2.repeat(1,3,1,1))
+                if args.upsampler == 'featup':
+                    # for b_idx in tqdm(range(0,B*D,MB), leave=False):  
+                    #     feat_vec1[b_idx:b_idx+MB] = featup.module(x1[b_idx:b_idx+MB].repeat(1,3,1,1))
+                    #     feat_vec2[b_idx:b_idx+MB] = featup.module(x2[b_idx:b_idx+MB].repeat(1,3,1,1))
+                    feat_vec1 = featup.module(x1.repeat(1,3,1,1))  # Put it through DINO and FeatUP
+                    feat_vec2 = featup.module(x2.repeat(1,3,1,1))
+                elif args.upsampler == 'interp':
+                    # for b_idx in tqdm(range(0,B*D,MB), leave=False):  
+                    #     feat_vec1[b_idx:b_idx+MB] = f.interpolate(featup.module.model(x1[b_idx:b_idx+MB].repeat(1,3,1,1)), size=(H,W), mode='bilinear')
+                    #     feat_vec2[b_idx:b_idx+MB] = f.interpolate(featup.module.model(x2[b_idx:b_idx+MB].repeat(1,3,1,1)),  size=(H,W), mode='bilinear')
+                    feat_vec1 = f.interpolate(featup.module.model(x1.repeat(1,3,1,1)), size=(H,W), mode='bilinear')  # Put it only through DINO and upsample with interpolation
+                    feat_vec2 = f.interpolate(featup.module.model(x2.repeat(1,3,1,1)), size=(H,W), mode='bilinear')
                 feat_vec1 = feat_vec1.permute(0,2,3,1).flatten(0,2)
                 feat_vec2 = feat_vec2.permute(0,2,3,1).flatten(0,2)
 
@@ -131,16 +140,13 @@ if __name__ == '__main__':
                 for batch_idx, real_idx in enumerate(index):
                     img_path = train_loader.dataset.imgs[real_idx]
                     name, ext = os.path.splitext(img_path)
-                    gt_path = name + f"_gt_k{args.k}" + ext
+                    gt_path = name + f"_gt_k{args.k}_{args.upsampler}" + ext
                     np.save(gt_path, torch.cat((gt1[batch_idx].unsqueeze(0),gt2[batch_idx].unsqueeze(0))).cpu().numpy())
                 
                 tqdm_progress.update(1)
 
-                # Generate cluster colors using kmeans
-                # clusters = kmeans.centroids
-                # color_kmeans = Kmeans(d=384, k=3, seed=args.seed, verbose=False, gpu=True if not args.cpu else False)
-                # color_kmeans.train(clusters)
-                # _, colors = kmeans.index.search(clusters, 3, )
+
+                # # Stuff for Debugging:
 
                 # # Select 2D images
                 # img_idx = 0
@@ -148,8 +154,8 @@ if __name__ == '__main__':
                 # s_idx = D//2
                 # in1 = input1[img_idx,m_idx,:,:,s_idx].unsqueeze(0)
                 # in2 = input2[img_idx,m_idx,:,:,s_idx].unsqueeze(0)
-                # gt1_img = gt1[img_idx,:,:,:,s_idx].argmax(dim=0).unsqueeze(0)
-                # gt2_img = gt2[img_idx,:,:,:,s_idx].argmax(dim=0).unsqueeze(0)
+                # gt1_img = gt1[img_idx,:,:,s_idx].unsqueeze(0)
+                # gt2_img = gt2[img_idx,:,:,s_idx].unsqueeze(0)
 
                 # # Min-max norm input images
                 # in1 = (in1 - in1.min())/(in1.max() - in1.min())

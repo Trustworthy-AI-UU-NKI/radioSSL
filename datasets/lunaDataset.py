@@ -58,8 +58,9 @@ class LunaPretask(Dataset):
         if 'cluster' in self.config.model:
             if self.load_gt:
                 name, ext = os.path.splitext(image_path)
-                gt_path = name + f"_gt_k{self.config.k}" + ext
-                gt_pair = np.load(image_path)
+                gt_path = name + f"_gt_k{self.config.k}_{self.config.upsampler}" + ext  # TODO: Revert it back to this one, the other is just for debugging old files
+                # gt_path = name + f"_gt_k{self.config.k}" + ext
+                gt_pair = np.load(gt_path)
                 gt1 = gt_pair[0]
                 gt2 = gt_pair[1]
             else:
@@ -247,7 +248,7 @@ def augmentation(x, config):
 
 
 class LunaFineTune(Dataset):
-    def __init__(self, config, true_list, false_list, train, input_shape=(64, 64, 64), test=False):
+    def __init__(self, config, true_list, false_list, train, input_shape=(128, 128, 64), test=False):
         self.config = config
         self.input_shape = input_shape
         self.true_list = true_list

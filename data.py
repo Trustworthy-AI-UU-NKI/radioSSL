@@ -153,8 +153,8 @@ class DataGenerator:
         train_path = os.path.join(args.data, 'train', 'ct')
         valid_path = os.path.join(args.data, 'val', 'ct')
 
-        x_train = [os.path.join(train_path,x) for x in os.listdir(train_path) if 'global' in x]
-        x_valid = [os.path.join(valid_path,x) for x in os.listdir(valid_path) if 'global' in x]
+        x_train = [os.path.join(train_path,x) for x in os.listdir(train_path) if 'global' in x and 'gt' not in x]
+        x_valid = [os.path.join(valid_path,x) for x in os.listdir(valid_path) if 'global' in x and 'gt' not in x]
         print(f'Train Images {len(x_train)}, Valid Images {len(x_valid)}')
 
         train_ds = LitsPretask(args, x_train, train=True, transform=self.pcrlv2_spatial_transforms,
@@ -177,8 +177,8 @@ class DataGenerator:
         train_path = os.path.join(args.data, 'train', 'ct')
         valid_path = os.path.join(args.data, 'val', 'ct')
 
-        x_train = [os.path.join(train_path,x) for x in os.listdir(train_path) if 'global' in x]
-        x_valid = [os.path.join(valid_path,x) for x in os.listdir(valid_path) if 'global' in x]
+        x_train = [os.path.join(train_path,x) for x in os.listdir(train_path) if 'global' in x and 'gt' not in x]
+        x_valid = [os.path.join(valid_path,x) for x in os.listdir(valid_path) if 'global' in x and 'gt' not in x]
         print(f'Train Images {len(x_train)}, Valid Images {len(x_valid)}')
 
         train_ds = LitsPretask(args, x_train, train=True, transform=self.cluster_spatial_transforms,

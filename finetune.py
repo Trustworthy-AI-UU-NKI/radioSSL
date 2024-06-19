@@ -133,9 +133,6 @@ def train_segmentation(args, dataloader, in_channels, n_classes, run_dir, writer
             step_epochs =  args.epochs // n_epochs # Every how many epochs to sample
 
             for i, (x, y) in enumerate(valid_generator):
-                # TODO: remove
-                # if i != 0:
-                #     continue  # Validate only batch 0
 
                 if not args.cpu:
                     x = x.cuda()
@@ -151,19 +148,6 @@ def train_segmentation(args, dataloader, in_channels, n_classes, run_dir, writer
                     x = x.permute(0,4,1,2,3).flatten(0,1)  # B x M x H x W x D -> B*D x M x H x W
                     y = y.permute(0,4,1,2,3).flatten(0,1)
 
-                # TODO: remove
-                #pred = torch.zeros(B,3,H,W,D)
-                # weight_path = '/projects/0/prjs0905/runs/exp_dino_cluster/brats_finetune_cluster_brats_pretrain/cluster_3d_k50_sc_pretrain_encoder_finetune_all_b4_e300_lr001000_r40_t17170160124704056.pt'
-                # if args.cpu:
-                #     state_dict = torch.load(weight_path, map_location=torch.device('cpu'))['state_dict']
-                # else:
-                #     state_dict = torch.load(weight_path)['state_dict']
-                # tmp_state_dict = {}
-                # for key in state_dict.keys():
-                #     tmp_state_dict["module." + key] = state_dict[key]
-                # state_dict = tmp_state_dict
-                # model.load_state_dict(state_dict)
-
                 pred = model(x)
 
                 if args.d == 2:
@@ -176,24 +160,28 @@ def train_segmentation(args, dataloader, in_channels, n_classes, run_dir, writer
                 valid_losses.append(round(loss.item(),4))
 
                 # Gather predictions to visualize on grid
-                if args.vis and (epoch % step_epochs == 0) and (epoch / step_epochs) <= n_epochs and i==0:  
+                if args.vis and (epoch % step_epochs == 0) and (epoch / step_epochs) <= n_epochs and i==0:  # Only visualize batch 0 (i) for the sampled epochs
                     n_images = min(N,args.b)  # The number of images to sample from for the grid (N or all images if total less than N)
                     if epoch == 0:  # If epoch 0, add the input images and ground truth as two first rows of the grid
                         for img_idx in range(n_images):
-                            slice_idx = [100, 40, 55, 85]
+                            if args.n == 'brats':
+                                slice_idx = [100, 40, 55, 85]  # TODO: Works only for batch size = 4
+                            else:
+                                slice_idx = [60, 15, 32, 52]  # TODO: Works only for batch size = 4
                             # Input
                             x_i = x[img_idx,0,:,:,slice_idx[img_idx]]                   
                             x_i = (x_i - x_i.min())/(x_i.max() - x_i.min())  # Min-max norm input images
                             x_i = x_i.repeat((3,1,1)).permute(1,2,0)  # Convert to RGB and move channel dim to the end
                             x_i = x_i.cpu().detach().numpy()
+
                             # Ground truth segmentation mask
                             y_i = y[img_idx,:,:,:,slice_idx[img_idx]] 
                             y_i = y_i.permute(1,2,0)
-                            if y_i.shape[-1] != 3:  # If not already RGB convert to RGB with red color for mask
-                                temp_y_i = torch.zeros((y_i.shape[0], y_i.shape[1], 3))
-                                temp_y_i[y_i==1] = [1, 0, 0]
-                                y_i = temp_y_i
                             y_i = y_i.cpu().detach().numpy()
+                            if y_i.shape[-1] != 3:  # If not already RGB, convert to RGB with red color for mask
+                                y_i = np.concatenate([y_i,np.zeros(y_i.shape),np.zeros(y_i.shape)], axis=2)
+                            y_i = y_i.astype(np.float32)
+                            
                             # Apply segmentation mask on image
                             if args.n == 'brats':
                                 y_i[np.all(y_i==[1,0,0], axis=-1)] = [0,1,0]  # Convert red to green (WT)
@@ -210,16 +198,14 @@ def train_segmentation(args, dataloader, in_channels, n_classes, run_dir, writer
                             pred_i = pred[img_idx,:,:,:,slice_idx[img_idx]]
                             pred_i = pred_i.permute(1,2,0)
                             pred_i = pred_i.cpu().detach().numpy()
-                            if args.n == 'brats':
+                            if args.n == 'brats':  # We have 3 classes for BraTS
                                 temp_pred_i = np.zeros(pred_i.shape)
-                                # temp_pred_i[pred_i[:,:,0]>=0.5] = [0,1,0]  # WT
-                                # temp_pred_i[pred_i[:,:,2]>=0.5] = [0,0,1]  # ET
-                                # temp_pred_i[pred_i[:,:,1]>=0.5] = [1,0,0]  # TC
                                 temp_pred_i[:,:,1] = np.fmax(0, pred_i[:,:,0] - pred_i[:,:,1]) # WT  (Because the more red {TC} we have the less green {WT} we want)
                                 temp_pred_i[:,:,2] = np.fmax(0, pred_i[:,:,2])  # ET
                                 temp_pred_i[:,:,0] = np.fmax(0,pred_i[:,:,1] - pred_i[:,:,2]) # TC  (Because the more blue {ET} we have the less red {TC}} we want)
- 
                                 pred_i = temp_pred_i
+                            else:  # We have 1 class for LiTS, so convert mask to RGB
+                                pred_i = np.repeat(pred_i,3,axis=2)
 
                             grid_pred.append(pred_i)
                 

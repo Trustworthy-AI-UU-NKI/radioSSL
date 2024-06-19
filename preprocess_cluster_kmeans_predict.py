@@ -28,7 +28,7 @@ if __name__ == '__main__':
     parser = argparse.ArgumentParser(description='Self Training benchmark')
     parser.add_argument('--data', metavar='DIR', default='/home/igogou/data/LUNA16',
                         help='Path to dataset')
-    parser.add_argument('--centroids', default=None, type=float, help='File containing pre-trained k-means centroids')
+    parser.add_argument('--centroids', default=None, type=str, help='File containing pre-trained k-means centroids')
     parser.add_argument('--ratio', default=1, type=float, help='Ratio of data used for pretraining/finetuning.')
     parser.add_argument('--model', default='cluster', choices=['cluster'], help='Choose the model')
     parser.add_argument('--upsampler', default='featup', choices=['featup','interp'], help='Choose the model')
@@ -70,7 +70,7 @@ if __name__ == '__main__':
     else:
         featup = featup.cpu()
     kmeans = Kmeans(d=384, k=args.k, niter=1, seed=args.seed, verbose=False, gpu=True if not args.cpu else False)
-    centroids = np.load(os.path.join(args.data,f'kmeans_centroids_k{args.k}.npy'))
+    centroids = np.load(os.path.join(args.data,f'kmeans_centroids_k{args.k}_{args.upsampler}.npy')) # TODO: add also argument support
     featup.eval()
 
     # Predict with K-Means --------------------------------------------------------------------------------------------------------------

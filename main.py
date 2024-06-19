@@ -39,6 +39,7 @@ if __name__ == '__main__':
     parser.add_argument('--amp', action='store_true', default=False)
     parser.add_argument('--skip_conn', action='store_true', default=False, help='To include skip connections in the U-Net or not. Ideally, use False for pretrain and True for finetune')
     parser.add_argument('--k', default=10, type=int, help='Number of clusters for clustering pretask')
+    parser.add_argument('--upsampler', default='featup', choices=['featup', 'interp'], type=str, help='Choose upsampler that produced the ground truth for dino pixel-level clustering')
     parser.add_argument('--tensorboard', action='store_true', default=False, help='To log on tensorboard or not')
     parser.add_argument('--vis', action='store_true', default=False, help='To visualize by logging prediction images on tensorboard')
     parser.add_argument('--cpu', action='store_true', default=False, help='To run on CPU or not')

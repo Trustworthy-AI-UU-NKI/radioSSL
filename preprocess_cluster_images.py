@@ -12,6 +12,7 @@ import csv
 
 import numpy as np
 import SimpleITK as sitk
+import scipy.ndimage as scp
 
 from tqdm import tqdm
 from optparse import OptionParser
@@ -26,15 +27,14 @@ parser.add_option("--fold", dest="fold", help="fold of subset", default=None, ty
 parser.add_option("--input_rows", dest="input_rows", help="input rows", default=64, type="int")
 parser.add_option("--input_cols", dest="input_cols", help="input cols", default=64, type="int")
 parser.add_option("--input_deps", dest="input_deps", help="input deps", default=32, type="int")
-parser.add_option("--crop_rows", dest="crop_rows", help="crop rows", default=64, type="int")
-parser.add_option("--crop_cols", dest="crop_cols", help="crop cols", default=64, type="int")
+# parser.add_option("--crop_rows", dest="crop_rows", help="crop rows", default=64, type="int")
+# parser.add_option("--crop_cols", dest="crop_cols", help="crop cols", default=64, type="int")
 parser.add_option("--bg_max", dest="bg_max", help="lung max", default=0.15, type="float")
 parser.add_option("--data", dest="data", help="the directory of the dataset", default='/data/LUNA16',
                   type="string")
 parser.add_option("--save", dest="save", help="the directory of processed 3D cubes",
                   default=None, type="string")
 parser.add_option("--scale", dest="scale", help="scale of the generator", default=16, type="int")
-parser.add_option('--z_align', action='store_true', dest='z_align', default=False, help='z dim align when cropping')
 parser.add_option('--seed', default=1, type="int")
 
 (options, args) = parser.parse_args()
@@ -60,8 +60,6 @@ class setup_config():
                  input_rows=None,
                  input_cols=None,
                  input_deps=None,
-                 crop_rows=None,
-                 crop_cols=None,
                  len_border=None,
                  len_border_z=None,
                  scale=None,
@@ -69,13 +67,10 @@ class setup_config():
                  SAVE_DIR=None,
                  len_depth=None,
                  bg_max=1.0,
-                 z_align = False
                  ):
         self.input_rows = input_rows
         self.input_cols = input_cols
         self.input_deps = input_deps
-        self.crop_rows = crop_rows
-        self.crop_cols = crop_cols
         self.len_border = len_border
         self.len_border_z = len_border_z
         self.scale = scale
@@ -83,7 +78,6 @@ class setup_config():
         self.len_depth = len_depth
         self.bg_max = bg_max
         self.SAVE_DIR = SAVE_DIR
-        self.z_align = z_align
 
     def display(self):
         """Display Configuration values."""
@@ -97,8 +91,6 @@ class setup_config():
 config = setup_config(input_rows=options.input_rows,
                       input_cols=options.input_cols,
                       input_deps=options.input_deps,
-                      crop_rows=options.crop_rows,
-                      crop_cols=options.crop_cols,
                       scale=options.scale,
                       len_border=0,
                       len_border_z=0,
@@ -106,13 +98,12 @@ config = setup_config(input_rows=options.input_rows,
                       bg_max=options.bg_max,
                       DATA_DIR=options.data,
                       SAVE_DIR=options.save,
-                      z_align=options.z_align
                       )
 config.display()
 
-col_size = [(160, 160, 32), (192, 192, 32), (128, 128, 32)]
-col_size_z_align = [(160, 160, 32), (192, 192, 32), (128, 128, 32)]  # If z_align then the slice dim must always be the same size 
-input_rows, input_cols, input_depth = (128, 128, 32)
+crop_size = [(160, 160, 32), (192, 192, 32), (128, 128, 32)]  # TODO: create argument support for this
+# crop_size = [(128, 128, 32), (96, 96, 32), (64, 64, 32)]  # TODO: create argument support for this
+input_rows, input_cols, input_depth = (config.input_rows, config.input_cols, config.input_deps)
 
 def load_sitk_with_resample(img_path):
     outsize = [0, 0, 0]
@@ -167,7 +158,7 @@ def cal_iou(box1, box2):
     return iou
 
 
-def crop_pair(img_array, z_align = False):
+def crop_pair(img_array):
 
     while True:
         size_x, size_y, size_z = img_array.shape
@@ -184,10 +175,6 @@ def crop_pair(img_array, z_align = False):
             padding = [0, 0, -pad + 1]
             img_array2 = np.pad(img_array2, padding, mode='constant', constant_values=0)
             size_z += -pad + 1
-        if z_align:
-            crop_size = col_size_z_align
-        else:
-            crop_size = col_size
         while True:
             size_index1 = np.random.randint(0, len(crop_size))
             crop_rows1, crop_cols1, crop_deps1 = crop_size[size_index1]
@@ -205,14 +192,13 @@ def crop_pair(img_array, z_align = False):
                                       size_z - crop_deps1 - config.len_depth - 1 - config.len_border_z)
             start_x2 = random.randint(0 + config.len_border, size_x - crop_rows2 - 1 - config.len_border)
             start_y2 = random.randint(0 + config.len_border, size_y - crop_cols2 - 1 - config.len_border)
-            if z_align:  # If z_align, the crops must be on the same slices (because there is only 2D RoI align)
-                start_z2 = start_z1
-            else:
-                start_z2 = random.randint(0 + config.len_border_z,
+            start_z2 = random.randint(0 + config.len_border_z,
                                         size_z - crop_deps2 - config.len_depth - 1 - config.len_border_z)          
             crop_coords1 = (start_x1, start_x1 + crop_rows1, start_y1, start_y1 + crop_cols1, start_z1, start_z1 + crop_deps1)
             crop_coords2 = (start_x2, start_x2 + crop_rows2, start_y2, start_y2 + crop_cols2, start_z2, start_z2 + crop_deps2)
             iou = cal_iou(crop_coords1, crop_coords2)
+            
+            # Minimum IoU constraint
             if iou > 0.3:
                 break
 
@@ -268,9 +254,9 @@ def crop_pair(img_array, z_align = False):
         d_img2 /= (config.len_depth - 1)
         d_img2 = 1.0 - d_img2
 
+        # Maximum background pixels constraint
         if np.sum(d_img1) > config.bg_max * crop_cols1 * crop_deps1 * crop_rows1:
             continue
-        # print(np.sum(d_img1))
         if np.sum(d_img2) > config.bg_max * crop_cols1 * crop_deps1 * crop_rows1:
             continue
 
@@ -287,11 +273,17 @@ def infinite_generator_from_one_volume(img_array, save_dir, root_dir, name):
 
     csv_lines = []
     
-    img_array[img_array < config.hu_min] = config.hu_min
-    img_array[img_array > config.hu_max] = config.hu_max
-    img_array = 1.0 * (img_array - config.hu_min) / (config.hu_max - config.hu_min)
+    # Hounsfield unit truncation (for CT)
+    if options.n in ['luna', 'lits']:
+        img_array[img_array < config.hu_min] = config.hu_min
+        img_array[img_array > config.hu_max] = config.hu_max
+    
+    # Min-max normalize
+    img_array = 1.0 * (img_array - np.min(img_array)) / (np.max(img_array) - np.min(img_array))
+
+    # Crop generation
     for num_pair in range(config.scale):
-        crop_window1, crop_window2, crop_coords1, crop_coords2 = crop_pair(img_array, z_align=config.z_align)
+        crop_window1, crop_window2, crop_coords1, crop_coords2 = crop_pair(img_array)
         crop_window = np.stack((crop_window1, crop_window2), axis=0)
         global_name = name + '_global_' + str(num_pair) + '.npy'
         global_path = os.path.join(save_dir, global_name)
@@ -320,6 +312,7 @@ def luna_preprocess_thread(fold):
             img_array = load_sitk_with_resample(img_file)
             img_array = sitk.GetArrayFromImage(img_array)
             img_array = img_array.transpose(2, 1, 0)
+            img_array = scp.zoom(img_array,(0.75, 0.75, 1), order=1)  # scale input HxW to half size but not D dimension (0.75 actually results in approximately half the original size 512->256)
             img_csv_rows = infinite_generator_from_one_volume(img_array=img_array, save_dir=save_dir, root_dir=save_path, name=img_name[:-4])  # remove file type .mhd (4 chars)
             csv_writer.writerows(img_csv_rows)
             csv_file.flush()
@@ -366,7 +359,7 @@ def brats_preprocess():
                     img_array = load_sitk_with_resample(img_file)
                     img_array = sitk.GetArrayFromImage(img_array)
                     img_array = img_array.transpose(2, 1, 0)
-                    img_csv_rows = infinite_generator_from_one_volume(img_array=img_array, save_dir=save_dir, root_dir=save_path, name=img_name[:-4])  # remove file type .mhd (4 chars)
+                    img_csv_rows = infinite_generator_from_one_volume(img_array=img_array, save_dir=save_dir, root_dir=save_path, name=img_name[:-7])  # remove file type .nii.gz (7 chars)
                     csv_writer.writerows(img_csv_rows)
                     csv_file.flush()
 
@@ -389,7 +382,8 @@ def lits_preprocess():
             img_array = load_sitk_with_resample(img_file)
             img_array = sitk.GetArrayFromImage(img_array)
             img_array = img_array.transpose(2, 1, 0)
-            img_csv_rows = infinite_generator_from_one_volume(img_array=img_array, save_dir=save_dir, root_dir=save_path, name=img_name[:-4])  # remove file type .mhd (4 chars)
+            img_array = scp.zoom(img_array,(0.75, 0.75, 1), order=1)  # scale input HxW to half size but not D dimension (0.75 actually results in approximately half the original size 512->256)
+            img_csv_rows = infinite_generator_from_one_volume(img_array=img_array, save_dir=save_dir, root_dir=save_path, name=img_name[:-3])  # remove file type .nii (3 chars)
             csv_writer.writerows(img_csv_rows)
             csv_file.flush()
 

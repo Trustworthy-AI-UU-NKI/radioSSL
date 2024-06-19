@@ -56,7 +56,8 @@ class BratsPretask(Dataset):
         if 'cluster' in self.config.model:
             if self.load_gt:
                 name, ext = os.path.splitext(image_path)
-                gt_path = name + f"_gt_k{self.config.k}" + ext
+                gt_path = name + f"_gt_k{self.config.k}_{self.config.upsampler}" + ext  # TODO: Revert it back to this one, the other is just for debugging old files
+                # gt_path = name + f"_gt_k{self.config.k}" + ext
                 gt_pair = np.load(gt_path)
                 gt1 = gt_pair[0]
                 gt2 = gt_pair[1]

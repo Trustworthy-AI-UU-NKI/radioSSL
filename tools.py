@@ -368,7 +368,7 @@ def get_brats_pretrain_list(data, ratio, suffix):
             line = line.strip('\n')
             train_patient_path = os.path.join(data, line)
             for file in os.listdir(train_patient_path):
-                if suffix in file and 'gt' not in file:
+                if suffix in file and 'gt' not in file:  # Do not include ground truth files for clustering
                     train_patients_list.append(os.path.join(train_patient_path, file))
     with open('./train_val_txt/brats_valid.txt', 'r') as f:
         for line in f:
@@ -524,7 +524,7 @@ def bceDiceLoss(input, target, train=True):
     target = target.reshape(num, -1)
     intersection = (input * target)
     dice = (2. * intersection.sum(1) + smooth) / (input.sum(1) + target.sum(1) + smooth)
-    dice = 1 - dice.sum() / num
+    dice = 1 - dice.sum() / num  # Notice that the lower the dice loss the better (we minimize the loss)
     if train:
         return dice + 0.2 * bce
     return dice
@@ -537,7 +537,7 @@ def dice_coeff(input, target):
     target = target.reshape(num, -1)
     intersection = (input * target)
     dice = (2. * intersection.sum(1) + smooth) / (input.sum(1) + target.sum(1) + smooth)
-    dice = dice.sum() / num
+    dice = dice.sum() / num  # Notice that the higher the dice score the better
     dice = dice.item()
     return dice
 

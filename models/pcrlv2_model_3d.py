@@ -208,6 +208,7 @@ class ClusterPatch3d(nn.Module):
         # Clustering Pretask Head
         self.emb_dim = 64  # E
         self.proto_num = n_clusters  # K
+        self.patch_size = 8  # P (Hardcoded because it is derived from our chosen architecture: each maxpool halves spatial dims)
         self.cluster_projection_head = nn.Linear(512, self.emb_dim)  # Projection head for each scale
         self.prototypes = nn.Linear(self.emb_dim, self.proto_num, bias=False)  # Prototypes 
 
@@ -215,12 +216,11 @@ class ClusterPatch3d(nn.Module):
     def forward(self, x):
 
         # Encoder
-        out64 = self.maxpool(self.down_tr64(x))
-        out128 = self.maxpool(self.down_tr128(out64))
-        out256 = self.maxpool(self.down_tr256(out128))
-        out512 = self.down_tr512(out256)
+        skip_out64 = self.down_tr64(x)
+        skip_out128 = self.down_tr128(self.maxpool(skip_out64))
+        skip_out256 = self.down_tr256(self.maxpool(skip_out128))
+        out512 = self.down_tr512(self.maxpool(skip_out256))
 
-        self.grid_dim = out512.shape[2:]  # Dimensions of grid of patches 
 
         # Flatten spatial dims HP, WP, DP of feature map (B x CP x HP x WP x DP -> B x CP x NP) and bring channel dim to the end -> (B x NP x CP)
         feat = out512.flatten(start_dim=2,end_dim=4).permute(0,2,1)

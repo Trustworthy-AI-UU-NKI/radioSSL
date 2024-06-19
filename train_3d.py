@@ -116,8 +116,7 @@ def train_3d(args, data_loader, run_dir, writer=None):
         n_epochs = min(N,args.epochs) # The number of epochs to sample for the grid (N or all epochs if total less than N)
         step_epochs =  args.epochs // n_epochs # Every how many epochs to sample
         
-        if args.vis and (epoch % step_epochs == 0) and (epoch / step_epochs) <= n_epochs and 'cluster' in args.model and args.n == 'brats':  
-            # TODO: Currently only works for BraTS Clustering
+        if args.vis and (epoch % step_epochs == 0) and (epoch / step_epochs) <= n_epochs and 'cluster' in args.model:  
 
             print("==> Validating...")
             
@@ -518,7 +517,8 @@ def train_cluster_patch_inner(args, epoch, train_loader, model, optimizer, write
             cos_sim2 = torch.matmul(emb2, proto.t())
 
             N = cos_sim1.shape[1]  # Number of patches
-            HP, WP, DP = model.module.grid_dim  # Grid of patches dims
+            P = model.module.patch_size  # Patch size
+            HP, WP, DP = (H//P, W//P, D//P)  # Grid of patches dims
             K = model.module.proto_num  # Clusters
 
             # Flatten batch and patch num dimensions of similarity matrices (BxNxK -> B*NxK), and transpose matrices (KxB*N) for sinkhorn algorithm
@@ -563,7 +563,6 @@ def train_cluster_patch_inner(args, epoch, train_loader, model, optimizer, write
                 # Select 2D images
                 img_idx = 0
                 m_idx = 0
-                c_idx = 0
                 in1 = x1[img_idx,m_idx,:,:,input1.size(-1)//2].unsqueeze(0)
                 in2 = x2[img_idx,m_idx,:,:,input2.size(-1)//2].unsqueeze(0)
                 pred1 = pred1[img_idx,:,:,:,pred1.size(-1)//2].argmax(dim=0).unsqueeze(0)  # Take only hard cluster assignment (argmax)
@@ -581,14 +580,6 @@ def train_cluster_patch_inner(args, epoch, train_loader, model, optimizer, write
                 gt1 = f.interpolate(gt1.float().unsqueeze(0), size=(H,W)).squeeze(0)
                 gt2 = f.interpolate(gt2.float().unsqueeze(0), size=(H,W)).squeeze(0)
 
-                # Send to cpu
-                in1 = in1.cpu().detach()
-                in2 = in2.cpu().detach()
-                pred1 = pred1.cpu().detach()
-                pred2 = pred2.cpu().detach()
-                gt1 = gt1.cpu().detach()
-                gt2 = gt2.cpu().detach()
-
                 # Give color to each cluster in cluster masks
                 pred1 = pred1.repeat((3,1,1)).permute(1,2,0)  # Convert to RGB and move channel dim to the end
                 pred2 = pred2.repeat((3,1,1)).permute(1,2,0)
@@ -599,10 +590,10 @@ def train_cluster_patch_inner(args, epoch, train_loader, model, optimizer, write
                     pred2[pred2[:,:,0] == c] = colors[c]
                     gt1[gt1[:,:,0] == c] = colors[c]
                     gt2[gt2[:,:,0] == c] = colors[c]
-                pred1 = pred1.permute(2,1,0)
-                pred2 = pred2.permute(2,1,0)
-                gt1 = gt1.permute(2,1,0)
-                gt2 = gt2.permute(2,1,0)
+                pred1 = pred1.permute(2,0,1)
+                pred2 = pred2.permute(2,0,1)
+                gt1 = gt1.permute(2,0,1)
+                gt2 = gt2.permute(2,0,1)
 
                 # Pad images for better visualization                
                 in1 = f.pad(in1.unsqueeze(0),(2,1,2,2),value=1)
@@ -613,17 +604,17 @@ def train_cluster_patch_inner(args, epoch, train_loader, model, optimizer, write
                 gt2 = f.pad(gt2.unsqueeze(0),(1,2,2,2),value=1)
 
                 # Combine crops and save in tensorboard
-                in_img = torch.cat((in1,in2),dim=3).squeeze(0).cpu().detach().numpy()
-                pred_img = torch.cat((pred1,pred2),dim=3).squeeze(0).cpu().detach().numpy()
-                gt_img = torch.cat((gt1,gt2),dim=3).squeeze(0).cpu().detach().numpy()
+                in_img = torch.cat((in1,in2),dim=3).squeeze(0)
+                pred_img = torch.cat((pred1,pred2),dim=3).squeeze(0)
+                gt_img = torch.cat((gt1,gt2),dim=3).squeeze(0).cpu()
 
                 in_img_name = 'img/train/raw' 
                 pred_img_name = f'img/train/pred'
                 gt_img_name = f'img/train/gt'
 
-                writer.add_image(in_img_name, img_tensor=in_img, global_step=epoch, dataformats='CHW')
-                writer.add_image(pred_img_name, img_tensor=pred_img, global_step=epoch, dataformats='CHW')   
-                writer.add_image(gt_img_name, img_tensor=gt_img, global_step=epoch, dataformats='CHW')
+                writer.add_image(in_img_name, img_tensor=in_img.cpu().detach().numpy(), global_step=epoch, dataformats='CHW')
+                writer.add_image(pred_img_name, img_tensor=pred_img.cpu().detach().numpy(), global_step=epoch, dataformats='CHW')   
+                writer.add_image(gt_img_name, img_tensor=gt_img.cpu().detach().numpy(), global_step=epoch, dataformats='CHW')
 
         # TODO: add the other losses later
         loss1 = cluster_loss
@@ -700,17 +691,16 @@ def val_cluster_patch_inner(args, epoch, val_loader, model, colors, N):
 
             grid_pred = []  # Contains the grid predictions of a specific scale
 
-            N = model.module.patch_num[sc]
-            PH, PW, PD = model.module.patch_dim[sc]
+            P = model.module.patch_size
 
             # Convert to probabilities
             pred = pred.softmax(2)
 
             # Convert prediction to (soft) cluster masks (restore spatial position of pooled image)
-            NPH = H//PH  # Num patches at X
-            NPW = W//PW  # Num patches at Y
-            NPD = D//PD  # Num patches at Z
-            pred = pred.permute(0,2,1).reshape((B,K,NPH,NPW,NPD))
+            HP = H//P  # Num patches at X
+            WP = W//P  # Num patches at Y
+            DP = D//P  # Num patches at Z
+            pred = pred.permute(0,2,1).reshape((B,K,HP,WP,DP))
 
             # Gather predictions to visualize on grid
             n_images = min(N,args.b)  # The number of images to sample from for the grid (N or all images if total less than N)
@@ -723,7 +713,7 @@ def val_cluster_patch_inner(args, epoch, val_loader, model, colors, N):
                     grid_pred.append(x_i)
             else:
                 for img_idx in range(n_images): # If next epochs, add the predictions for each image at the current epoch as the next row
-                    pred_i = pred[img_idx,:,:,:,NPD//2].argmax(dim=0).unsqueeze(0)  # Take only hard cluster assignment (argmax)
+                    pred_i = pred[img_idx,:,:,:,DP//2].argmax(dim=0).unsqueeze(0)  # Take only hard cluster assignment (argmax)
                     pred_i = f.interpolate(pred_i.float().unsqueeze(0), size=(H,W)).squeeze(0)
                     pred_i = pred_i.repeat((3,1,1)).permute(1,2,0).float()  # Convert to RGB and move channel dim to the end
                     for c in range(colors.shape[0]):  # Give color to each cluster in cluster masks

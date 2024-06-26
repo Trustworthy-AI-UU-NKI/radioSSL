@@ -119,7 +119,7 @@ class LitsFineTune(Dataset):
         # resize
         ct_array = ct_array.unsqueeze(1)  # Add temporary channel dimension (D x H x W -> (D x 1 x H x W)
         seg_array = seg_array.unsqueeze(1)
-        ct_array = f.interpolate(ct_array, scale_factor=(0.5,0.5))  # Scale only height and weight, not slice dim
+        ct_array = f.interpolate(ct_array, scale_factor=(0.5,0.5))  # Scale only height and weight, not slice dim  # TODO: Check that this doesn't flip height and width because finetune and pretrain datasets end up with diff orientation
         seg_array = f.interpolate(seg_array, scale_factor=(0.5,0.5))
         ct_array = ct_array.squeeze(1)
         seg_array = seg_array.squeeze(1)

@@ -53,7 +53,7 @@ class BratsPretask(Dataset):
         input2 = self.transform(crop2)
 
         # Ground truth
-        if 'cluster' in self.config.model:
+        if self.config.model == 'cluster':  # Only cluster, not cluster_patch
             if self.load_gt:
                 name, ext = os.path.splitext(image_path)
                 gt_path = name + f"_gt_k{self.config.k}_{self.config.upsampler}" + ext  # TODO: Revert it back to this one, the other is just for debugging old files
@@ -67,6 +67,9 @@ class BratsPretask(Dataset):
         elif self.config.model == 'pcrlv2':
             gt1 = copy.deepcopy(input1)
             gt2 = copy.deepcopy(input2)
+        else:
+            gt1 = []
+            gt2 = []
 
         # Global input
         input1 = self.global_transforms(input1)
@@ -136,15 +139,15 @@ class BratsFineTune(Dataset):
         if self.train:
             # crop volume
             x, y = self.random_crop(x, y)
-            if random.random() < 0.5:
-                x = np.flip(x, axis=1)
-                y = np.flip(y, axis=1)
-            if random.random() < 0.5:
-                x = np.flip(x, axis=2)
-                y = np.flip(y, axis=2)
-            if random.random() < 0.5:
-                x = np.flip(x, axis=3)
-                y = np.flip(y, axis=3)
+            # if random.random() < 0.5:
+            #     x = np.flip(x, axis=1)
+            #     y = np.flip(y, axis=1)
+            # if random.random() < 0.5:
+            #     x = np.flip(x, axis=2)
+            #     y = np.flip(y, axis=2)
+            # if random.random() < 0.5:
+            #     x = np.flip(x, axis=3)
+            #     y = np.flip(y, axis=3)
         else:
             x, y = self.center_crop(x, y)
 

@@ -71,6 +71,7 @@ if __name__ == '__main__':
         featup = featup.cpu()
     kmeans = Kmeans(d=384, k=args.k, niter=1, seed=args.seed, verbose=False, gpu=True if not args.cpu else False)
     centroids = np.load(os.path.join(args.data,f'kmeans_centroids_k{args.k}_{args.upsampler}.npy')) # TODO: add also argument support
+    # centroids = np.load(os.path.join(args.data,f'kmeans_centroids_k{args.k}.npy')) # TODO: add also argument support
     featup.eval()
 
     # Predict with K-Means --------------------------------------------------------------------------------------------------------------
@@ -96,8 +97,10 @@ if __name__ == '__main__':
             with torch.no_grad():
                 
                 print('     Upsample', flush=True)
+                
                 # Get upsampled features from teacher DINO ViT16 encoder and flatten spatial dimensions to get feature vectors for each pixel
                 # B*D x 1 x H x W -(RGB)->  B*D x 3 x H x W -(DINO)-> B*D x C' x H' x W' -(Upsampler)-> B*D x C' x H x W -(Vectorize)-> B*D*H*W x C' 
+                
                 # feat_vec1 = torch.zeros((B*D,384,H,W))  # C' = 384
                 # feat_vec2 = torch.zeros((B*D,384,H,W))
                 # MB = 4 # Mini-batch size (to work on my local machine)

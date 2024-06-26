@@ -65,7 +65,7 @@ for pid in tqdm(paths):
     tumor_center_slice = (bbox[2].start + bbox[2].stop) // 2 
     slice_span = min(x.shape[-1] - tumor_center_slice, tumor_center_slice)
     y = y[:,:,tumor_center_slice - slice_span:tumor_center_slice + slice_span]
-    x = x[:,:,tumor_center_slice - slice_span:tumor_center_slice + slice_span]
+    x = x[:,:,tumor_center_slice - slice_span:tumor_center_slice + slice_span]  # 512 x 512 x 94
 
     sample_path = os.path.join(save_folder,pid)
     if not os.path.exists(sample_path):

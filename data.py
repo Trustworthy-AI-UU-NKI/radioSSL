@@ -1,7 +1,7 @@
 from torch.utils.data import DataLoader
 
 from datasets import *
-from utils import *
+from tools import *
 from torchvision import transforms, datasets
 import torch
 import torchio.transforms
@@ -16,7 +16,7 @@ def get_dataloader(args):
         phase = 'finetune'  # Because finetune and test use the same dataloader
     else:
         phase = args.phase
-    if 'cluster' in args.model:  # Cluster models (cluster, cluster_att) use the same dataloader for the pretask
+    if 'cluster' in args.model:  # Cluster models use the same dataloader for the pretask
         model = 'cluster'
     else:
         model = args.model
@@ -79,7 +79,7 @@ class DataGenerator:
                                         pin_memory=True, shuffle=False, num_workers=args.workers, worker_init_fn=seed_worker, generator=generator)
         return dataloader
 
-    def cluster_luna_pretask(self):
+    def cluster_luna_pretask(self, load_gt=True):
         print('using the reverse_aug pretrain on luna')
         args = self.args
         dataloader = {}
@@ -92,8 +92,8 @@ class DataGenerator:
         print(f'Train Images {len(x_train)}, Valid Images {len(x_valid)}')
 
         train_ds = LunaPretask(args, x_train, train=True, transform=self.cluster_spatial_transforms,
-                                     global_transforms=self.cluster_global_transforms, local_transforms=self.cluster_local_transforms)
-        valid_ds = LunaPretask(args, x_valid, train=False)
+                                     global_transforms=self.cluster_global_transforms, local_transforms=self.cluster_local_transforms, load_gt=load_gt)
+        valid_ds = LunaPretask(args, x_valid, train=False, load_gt=False)
 
         generator = torch.Generator()
         generator.manual_seed(args.seed)
@@ -125,17 +125,17 @@ class DataGenerator:
                                         pin_memory=True, shuffle=False, num_workers=args.workers, worker_init_fn=seed_worker, generator=generator)
         return dataloader
 
-    def cluster_brats_pretask(self):
+    def cluster_brats_pretask(self, load_gt=True):
         print('using the reverse_aug pretrain on brats')
         args = self.args
         dataloader = {}
         
-        x_train, x_valid, _ = get_brats_pretrain_list(self.args.data, self.args.ratio, suffix='_global_')
+        x_train, x_valid, _ = get_brats_pretrain_list(self.args.data, args.ratio, suffix='_global_')
         print(f'Train Images {len(x_train)}, Valid Images {len(x_valid)}')
 
         train_ds = BratsPretask(args, x_train, train=True, transform=self.cluster_spatial_transforms,
-                                     global_transforms=self.cluster_global_transforms, local_transforms=self.cluster_local_transforms)
-        valid_ds = BratsPretask(args, x_valid, train=False)
+                                     global_transforms=self.cluster_global_transforms, local_transforms=self.cluster_local_transforms, load_gt=load_gt)
+        valid_ds = BratsPretask(args, x_valid, train=False, load_gt=False)
 
         generator = torch.Generator()
         generator.manual_seed(args.seed)
@@ -153,8 +153,8 @@ class DataGenerator:
         train_path = os.path.join(args.data, 'train', 'ct')
         valid_path = os.path.join(args.data, 'val', 'ct')
 
-        x_train = [os.path.join(train_path,x) for x in os.listdir(train_path) if 'global' in x]
-        x_valid = [os.path.join(valid_path,x) for x in os.listdir(valid_path) if 'global' in x]
+        x_train = [os.path.join(train_path,x) for x in os.listdir(train_path) if 'global' in x and 'gt' not in x]
+        x_valid = [os.path.join(valid_path,x) for x in os.listdir(valid_path) if 'global' in x and 'gt' not in x]
         print(f'Train Images {len(x_train)}, Valid Images {len(x_valid)}')
 
         train_ds = LitsPretask(args, x_train, train=True, transform=self.pcrlv2_spatial_transforms,
@@ -170,20 +170,20 @@ class DataGenerator:
                                         pin_memory=True, shuffle=False, num_workers=args.workers, worker_init_fn=seed_worker, generator=generator)
         return dataloader
 
-    def cluster_lits_pretask(self):
+    def cluster_lits_pretask(self, load_gt=True):
         args = self.args
         dataloader = {}
 
         train_path = os.path.join(args.data, 'train', 'ct')
         valid_path = os.path.join(args.data, 'val', 'ct')
 
-        x_train = [os.path.join(train_path,x) for x in os.listdir(train_path) if 'global' in x]
-        x_valid = [os.path.join(valid_path,x) for x in os.listdir(valid_path) if 'global' in x]
+        x_train = [os.path.join(train_path,x) for x in os.listdir(train_path) if 'global' in x and 'gt' not in x]
+        x_valid = [os.path.join(valid_path,x) for x in os.listdir(valid_path) if 'global' in x and 'gt' not in x]
         print(f'Train Images {len(x_train)}, Valid Images {len(x_valid)}')
 
         train_ds = LitsPretask(args, x_train, train=True, transform=self.cluster_spatial_transforms,
-                                     global_transforms=self.cluster_global_transforms, local_transforms=self.cluster_local_transforms)
-        valid_ds = LitsPretask(args, x_valid, train=False)  
+                                     global_transforms=self.cluster_global_transforms, local_transforms=self.cluster_local_transforms, load_gt=load_gt)
+        valid_ds = LitsPretask(args, x_valid, train=False, load_gt=False)  
 
         print(f'Train Images {len(x_train)}, Valid Images {len(x_valid)}')
 

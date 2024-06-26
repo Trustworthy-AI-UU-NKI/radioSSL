@@ -36,7 +36,7 @@ class LidcFineTune(Dataset):
         x = x.T.unsqueeze(1) # Move slice dim to batch dim and add temporary channel dimension (H x W x D) -> (D x 1 x H x W)
         y = y.T.unsqueeze(1)
         x = f.interpolate(x.float(), size=(192,192))  # Scale only height and weight, not slice dim
-        y = f.interpolate(y.float(), size=(192,192)).int()  
+        y = f.interpolate(y.float(), size=(192,192)).int()
         x = x.permute(1,2,3,0)  # Put slice dim last (D x 1 x H x W -> 1 x H x W x D)
         y = y.permute(1,2,3,0)
         

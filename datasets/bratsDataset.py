@@ -12,16 +12,17 @@ import torchio.transforms
 
 class BratsPretask(Dataset):
 
-    def __init__(self, config, img_train, train=False, transform=None, global_transforms=None, local_transforms=None):
+    def __init__(self, config, img_train, train=False, transform=None, global_transforms=None, local_transforms=None, load_gt=True):
         self.config = config
         self.imgs = img_train
         self.train = train
         self.transform = transform if transform != None else torchio.transforms.Compose([])
         self.global_transforms = global_transforms if global_transforms != None else torchio.transforms.Compose([])
-        self.local_input_enable = (config.model != 'cluster')  # Do not include local_views in dataloader for cluster_pretask (TODO: might change later)
+        self.local_input_enable = ('cluster' not in config.model)  # Do not include local_views in dataloader for cluster pretask (TODO: might change later)
         self.local_transforms = local_transforms if local_transforms != None else torchio.transforms.Compose([])
         self.norm = torchio.transforms.ZNormalization()
-        if config.model == 'cluster' :
+        self.load_gt = load_gt
+        if 'cluster' in config.model:
             self.coords = pd.read_csv(os.path.join(config.data,'crop_coords.csv'), names=['path','crop1','crop2'], index_col='path')  # coordinates of each pair of crops
         else:
             self.coords = None
@@ -30,28 +31,51 @@ class BratsPretask(Dataset):
         return len(self.imgs)
 
     def __getitem__(self, index):
+
         # Load data
         image_path = self.imgs[index]
         relative_image_path = os.path.join(*os.path.normpath(image_path).split(os.sep)[-3:])
+        # relative_image_path = relative_image_path.replace('.ni','')  # TODO: This is just for debugging purposes because some old preprocessed datasets had a filename bug
         pair = np.load(image_path)
         crop1 = pair[0]
         crop1 = np.expand_dims(crop1, axis=0)
         crop2 = pair[1]
         crop2 = np.expand_dims(crop2, axis=0)
         
+        # Crop coordinates
         crop1_coords = []
         crop2_coords = []
-        if self.config.model == 'cluster':
+        if 'cluster' in self.config.model:
             crop1_coords = np.array(eval(self.coords.loc[relative_image_path]['crop1']))
             crop2_coords = np.array(eval(self.coords.loc[relative_image_path]['crop2']))
 
         input1 = self.transform(crop1)
         input2 = self.transform(crop2)
-        gt1 = copy.deepcopy(input1)
-        gt2 = copy.deepcopy(input2)
+
+        # Ground truth
+        if self.config.model == 'cluster':  # Only cluster, not cluster_patch
+            if self.load_gt:
+                name, ext = os.path.splitext(image_path)
+                gt_path = name + f"_gt_k{self.config.k}_{self.config.upsampler}" + ext  # TODO: Revert it back to this one, the other is just for debugging old files
+                # gt_path = name + f"_gt_k{self.config.k}" + ext
+                gt_pair = np.load(gt_path)
+                gt1 = gt_pair[0]
+                gt2 = gt_pair[1]
+            else:
+                gt1 = []
+                gt2 = []
+        elif self.config.model == 'pcrlv2':
+            gt1 = copy.deepcopy(input1)
+            gt2 = copy.deepcopy(input2)
+        else:
+            gt1 = []
+            gt2 = []
+
+        # Global input
         input1 = self.global_transforms(input1)
         input2 = self.global_transforms(input2)
 
+        # Local input
         local_inputs = []
         if self.local_input_enable:
             locals = np.load(image_path.replace('global', 'local'))
@@ -64,7 +88,7 @@ class BratsPretask(Dataset):
 
         return torch.tensor(input1, dtype=torch.float), torch.tensor(input2, dtype=torch.float), \
             torch.tensor(gt1, dtype=torch.float), \
-            torch.tensor(gt2, dtype=torch.float), crop1_coords, crop2_coords, local_inputs
+            torch.tensor(gt2, dtype=torch.float), crop1_coords, crop2_coords, local_inputs, index
 
 
 class BratsFineTune(Dataset):
@@ -85,7 +109,7 @@ class BratsFineTune(Dataset):
         for mode in modes:
             patient_id = os.path.split(patient_dir)[-1]
             volume_path = os.path.join(patient_dir, patient_id + "_" + mode + '.nii.gz')
-            volume = nib.load(volume_path).get_data()
+            volume = nib.load(volume_path).get_fdata()
             if not mode == "seg":
                 volume = self.normalize(volume)  # [0, 1.0]
             volumes.append(volume)  # [h, w, d]
@@ -115,15 +139,15 @@ class BratsFineTune(Dataset):
         if self.train:
             # crop volume
             x, y = self.random_crop(x, y)
-            if random.random() < 0.5:
-                x = np.flip(x, axis=1)
-                y = np.flip(y, axis=1)
-            if random.random() < 0.5:
-                x = np.flip(x, axis=2)
-                y = np.flip(y, axis=2)
-            if random.random() < 0.5:
-                x = np.flip(x, axis=3)
-                y = np.flip(y, axis=3)
+            # if random.random() < 0.5:
+            #     x = np.flip(x, axis=1)
+            #     y = np.flip(y, axis=1)
+            # if random.random() < 0.5:
+            #     x = np.flip(x, axis=2)
+            #     y = np.flip(y, axis=2)
+            # if random.random() < 0.5:
+            #     x = np.flip(x, axis=3)
+            #     y = np.flip(y, axis=3)
         else:
             x, y = self.center_crop(x, y)
 

@@ -39,7 +39,7 @@ def create_logger(args):
         folder_name = None
         
         if args.phase == 'finetune':
-            if args.model == 'cluster':
+            if 'cluster' in args.model:
                 cluster_k = re.search(r'_k[0-9]+_', args.weight).group(0)[1:]
             else:
                 cluster_k = ''
@@ -68,11 +68,11 @@ def create_logger(args):
             folder_name =  args.n + '_finetune' + '_' + pretrain_type
         
         elif args.phase == 'pretask':
+            sc = "sc_" if args.skip_conn else ""
             if args.model == 'pcrlv2':
-                sc = "sc_" if args.skip_conn else ""
                 run_name = f'{args.model}_{args.d}d_{sc}pretask_b{args.b}_e{args.epochs}_lr{"{:f}".format(args.lr).split(".")[-1]}_t{curr_time}'
-            elif args.model == 'cluster':
-                run_name = f'{args.model}_{args.d}d_k{args.k}_pretask_b{args.b}_e{args.epochs}_lr{"{:f}".format(args.lr).split(".")[-1]}_t{curr_time}'
+            elif 'cluster' in args.model:
+                run_name = f'{args.model}_{args.d}d_k{args.k}_{args.cluster_loss}_{sc}pretask_b{args.b}_e{args.epochs}_lr{"{:f}".format(args.lr).split(".")[-1]}_t{curr_time}'
             folder_name = args.model + '_' + args.n + '_pretrain'
         
         if not os.path.exists(os.path.join(args.output,folder_name)):
@@ -100,7 +100,15 @@ def get_model(args, in_channels, n_class):
             model = SegmentationModel(in_channels=in_channels, n_class=n_class, norm='gn', skip_conn=args.skip_conn)
         elif args.d == 2:
             model = PCRLv2(in_channels=in_channels, n_class=n_class, segmentation=True)
-    elif args.model == 'pcrlv2' or args.model == 'cluster':
+    elif args.model == 'pcrlv2':
+        if args.phase == 'finetune':
+            assert args.pretrained != 'none'
+            assert args.weight
+        if args.d == 3:
+            model = SegmentationModel(in_channels=in_channels, n_class=n_class, norm='gn', skip_conn=args.skip_conn)
+        elif args.d == 2:
+            model = PCRLv2(in_channels=in_channels, n_class=n_class)
+    elif 'cluster' in args.model:
         if args.phase == 'finetune':
             assert args.pretrained != 'none'
             assert args.weight
@@ -166,7 +174,6 @@ def prepare_model(args, in_channels, n_class):
                     pretrain_dict.update({k: v for k, v in state_dict.items() if
                                 k in model_dict and 'encoder' in k})
                 
-            
             if args.pretrained == 'all':
                 # Load pretrained decoder
                 if args.d == 3:
@@ -291,18 +298,18 @@ def get_luna_list(config, train_fold, valid_fold, test_fold, suffix, file_list):
     x_test = []
     for i in train_fold:
         for file in os.listdir(os.path.join(config.data, 'subset' + str(i))):
-            if suffix in file:
+            if suffix in file and 'gt' not in file:
                 if file_list is not None and file.split('_')[0] in file_list:
                     x_train.append(os.path.join(config.data, 'subset' + str(i), file))
                 elif file_list is None:
                     x_train.append(os.path.join(config.data, 'subset' + str(i), file))
     for i in valid_fold:
         for file in os.listdir(os.path.join(config.data, 'subset' + str(i))):
-            if suffix in file:
+            if suffix in file and 'gt' not in file:
                 x_valid.append(os.path.join(config.data, 'subset' + str(i), file))
     for i in test_fold:
         for file in os.listdir(os.path.join(config.data, 'subset' + str(i))):
-            if suffix in file:
+            if suffix in file and 'gt' not in file:
                 x_test.append(os.path.join(config.data, 'subset' + str(i), file))
     return x_train, x_valid, x_test
 
@@ -361,21 +368,21 @@ def get_brats_pretrain_list(data, ratio, suffix):
             line = line.strip('\n')
             train_patient_path = os.path.join(data, line)
             for file in os.listdir(train_patient_path):
-                if suffix in file:
+                if suffix in file and 'gt' not in file:  # Do not include ground truth files for clustering
                     train_patients_list.append(os.path.join(train_patient_path, file))
     with open('./train_val_txt/brats_valid.txt', 'r') as f:
         for line in f:
             line = line.strip('\n')
             val_patient_path = os.path.join(data, line)
             for file in os.listdir(val_patient_path):
-                if suffix in file:
+                if suffix in file and 'gt' not in file:
                     val_patients_list.append(os.path.join(val_patient_path, file))
     with open('./train_val_txt/brats_test.txt', 'r') as f:
         for line in f:
             line = line.strip('\n')
             test_patient_path = os.path.join(data, line)
             for file in os.listdir(test_patient_path):
-                if suffix in file:
+                if suffix in file and 'gt' not in file:
                     test_patients_list.append(os.path.join(test_patient_path, file))
     train_patients_list = train_patients_list[: int(len(train_patients_list) * ratio)]
     print(
@@ -390,7 +397,7 @@ def get_luna_finetune_nodule(config, train_fold, valid_txt, test_txt, suffix, fi
     x_test = []
     for i in train_fold:
         for file in os.listdir(os.path.join(config.data, 'subset' + str(i))):
-            if suffix in file:
+            if suffix in file and 'gt' not in file:
                 if file_list is not None and file.split('_')[0] in file_list:
                     x_train.append(os.path.join(config.data, 'subset' + str(i), file))
                 elif file_list is None:
@@ -517,7 +524,7 @@ def bceDiceLoss(input, target, train=True):
     target = target.reshape(num, -1)
     intersection = (input * target)
     dice = (2. * intersection.sum(1) + smooth) / (input.sum(1) + target.sum(1) + smooth)
-    dice = 1 - dice.sum() / num
+    dice = 1 - dice.sum() / num  # Notice that the lower the dice loss the better (we minimize the loss)
     if train:
         return dice + 0.2 * bce
     return dice
@@ -530,20 +537,12 @@ def dice_coeff(input, target):
     target = target.reshape(num, -1)
     intersection = (input * target)
     dice = (2. * intersection.sum(1) + smooth) / (input.sum(1) + target.sum(1) + smooth)
-    dice = dice.sum() / num
+    dice = dice.sum() / num  # Notice that the higher the dice score the better
     dice = dice.item()
     return dice
 
 
-def thor_dice_loss(input, target, train=True):
-    # print(input.shape, target.shape)
-    es_dice = bceDiceLoss(input[:, 0], target[:, 0], train)
-    tra_dice = bceDiceLoss(input[:, 1], target[:, 1], train)
-    aor_dice = bceDiceLoss(input[:, 2], target[:, 2], train)
-    heart_dice = bceDiceLoss(input[:, 3], target[:, 3], train)
-    print(f'label1 dice {es_dice}, label2 dice {tra_dice}, label3 dice{aor_dice}, label4 dice{heart_dice}')
-    return es_dice + tra_dice + aor_dice + heart_dice
-
+# Segmentation Losses
 
 def get_loss(dataset):
     loss_fun_name = dataset + '_dice_loss'
@@ -562,15 +561,22 @@ def brats_dice_loss(input, target, train=True):
     print(f'wt loss: {wt_loss}, tc_loss : {tc_loss}, et_loss: {et_loss}')
     return wt_loss + tc_loss + et_loss
 
-
 def lits_dice_loss(input, target, train=True):
     loss = bceDiceLoss(input, target, train)
     print(f'loss: {loss}')
     return loss
 
 
+# Clustering Losses
+
+def ce_loss(gt, out):
+    loss = - torch.mean(gt * torch.log(out))
+    return loss
+
 def swav_loss(gt1, gt2, out1, out2):
-    loss = - 0.5 * torch.mean(gt1 * torch.log(out2) + gt2 * torch.log(out1))
+    loss1 = ce_loss(gt1,out2)
+    loss2 = ce_loss(gt2,out1)
+    loss = 0.5 * (loss1 + loss2)
     return loss
 
 
@@ -601,59 +607,73 @@ def sinkhorn(args, Q: torch.Tensor, nmb_iters: int) -> torch.Tensor:
 
 def roi_align_intersect(pred1, pred2, gt1, gt2, box1, box2):
     # Cluster assignments to align for crop 1 and crop 2: pred1, pred2, gt1, gt2
-    # Dimensions (H,W,Z) of input crop: crop_shape
     # Coordinates of the crop bounding box : box1, box2
-    # ATTENTION AT THE ORDER OF DIMS: box is [x1,x2,y1,y2,z1,z2], ibox is [y1,x1,y2.x2]
 
-    # Crop dimensions
+    # Input Crop dimensions (Original, before standardizing to one common size for batchification)
     H1 = box1[:,1] - box1[:,0]
     W1 = box1[:,3] - box1[:,2]
+    D1 = box1[:,5] - box1[:,4]
     H2 = box2[:,1] - box2[:,0]
     W2 = box2[:,3] - box2[:,2]
+    D2 = box2[:,5] - box2[:,4]
 
-    # Pooled crop dimensions: (num patches in height) x (num patches in width) x (num patches in depth)
-    B, K, NPH, NPW, NPD = pred1.shape
+    # Output Dimensions
+    B, K, H, W, D = pred1.shape
+
+    # Convert to float
+    pred1 = pred1.float()
+    pred2 = pred2.float()
+    gt1 = gt1.float()
+    gt2 = gt2.float()
 
     # Calculate interesection box of the two crop bounding boxes
     x1 = torch.maximum(box1[:,0], box2[:,0])
-    y1 = torch.maximum(box1[:,2], box2[:,2])
     x2 = torch.minimum(box1[:,1], box2[:,1])
+    y1 = torch.maximum(box1[:,2], box2[:,2])
     y2 = torch.minimum(box1[:,3], box2[:,3])
+    z1 = torch.maximum(box1[:,4], box2[:,4])
+    z2 = torch.minimum(box1[:,5], box2[:,5])
 
     # Coordinates of intersecting box inside bbox 1 (percentage coordinates)
-    # z-dim is ommited because the intersection is the same at z-axis (already aligned)
-    ibox1 = torch.stack([(y1-box1[:,2])/W1, (x1-box1[:,0])/H1, (y2-box1[:,2])/W1, (x2-box1[:,0])/H1]).T  # Attention: Y1, X1, Y2, X2
+    x1_1 = (x1-box1[:,0]) / H1
+    x1_2 = (x2-box1[:,0]) / H1
+    y1_1 = (y1-box1[:,2]) / W1
+    y1_2 = (y2-box1[:,2]) / W1
+    z1_1 = (z1-box1[:,4]) / D1
+    z1_2 = (z2-box1[:,4]) / D1
 
     # Coordinates of intersecting box inside bbox 2 (percentage coordinates)
-    ibox2 = torch.stack([(y1-box2[:,2])/W2, (x1-box2[:,0])/H2, (y2-box2[:,2])/W2, (x2-box2[:,0])/H2]) .T
+    x2_1 = (x1-box2[:,0]) / H2
+    x2_2 = (x2-box2[:,0]) / H2
+    y2_1 = (y1-box2[:,2]) / W2
+    y2_2 = (y2-box2[:,2]) / W2
+    z2_1 = (z1-box2[:,4]) / D2
+    z2_2 = (z2-box2[:,4]) / D2
 
-    # Convert percentage coordinates to coordinates in pooled crop
-    for i, NP in enumerate([NPH,NPW,NPH,NPW]):
-        ibox1[:,i] = ibox1[:,i]*NP
-        ibox2[:,i] = ibox2[:,i]*NP
+    # Convert percentage coordinates to coordinates in output
+    x1_1 = (x1_1 * H).int()
+    x1_2 = (x1_2 * H).int()
+    y1_1 = (y1_1 * W).int()
+    y1_2 = (y1_2 * W).int()
+    z1_1 = (z1_1 * D).int()
+    z1_2 = (z1_2 * D).int()
+    x2_1 = (x2_1 * H).int()
+    x2_2 = (x2_2 * H).int()
+    y2_1 = (y2_1 * W).int()
+    y2_2 = (y2_2 * W).int()
+    z2_1 = (z2_1 * D).int()
+    z2_2 = (z2_2 * D).int()
 
-    # Repeat the same alignment for every slice
-    align1 = ibox1.unsqueeze(1).repeat(1,NPD,1)
-    align2 = ibox2.unsqueeze(1).repeat(1,NPD,1)
+    # Align
+    device = pred1.device
+    roi_pred1 = torch.zeros(size=pred1.shape).to(device)
+    roi_pred2 = torch.zeros(size=pred2.shape).to(device)
+    roi_gt1 = torch.zeros(size=gt1.shape).to(device)
+    roi_gt2 = torch.zeros(size=gt2.shape).to(device)
+    for b_idx in range(B):
+        roi_pred1[b_idx] = F.interpolate(pred1[b_idx, :, x1_1[b_idx]:x1_2[b_idx], y1_1[b_idx]:y1_2[b_idx], z1_1[b_idx]:z1_2[b_idx]].unsqueeze(0), size=(H,W,D))
+        roi_pred2[b_idx] = F.interpolate(pred2[b_idx, :, x2_1[b_idx]:x2_2[b_idx], y2_1[b_idx]:y2_2[b_idx], z2_1[b_idx]:z2_2[b_idx]].unsqueeze(0), size=(H,W,D))
+        roi_gt1[b_idx] = F.interpolate(gt1[b_idx, :, x1_1[b_idx]:x1_2[b_idx], y1_1[b_idx]:y1_2[b_idx], z1_1[b_idx]:z1_2[b_idx]].unsqueeze(0), size=(H,W,D))
+        roi_gt2[b_idx] = F.interpolate(gt2[b_idx, :, x2_1[b_idx]:x2_2[b_idx], y2_1[b_idx]:y2_2[b_idx], z2_1[b_idx]:z2_2[b_idx]].unsqueeze(0), size=(H,W,D))
 
-    # Preprocess alignments for roi_align
-    align1 = align1.reshape(B*NPD,4) # Flatten batch and slice dimension
-    align2 = align2.reshape(B*NPD,4)
-    idx = torch.arange(0,B*NPD).unsqueeze(1).to(pred1.device)
-    align1 = torch.cat((idx,align1),dim=1)  # Add index column
-    align2 = torch.cat((idx,align2),dim=1) 
-
-    # Flatten batch and slice dimension of crops
-    pred1 = pred1.permute(0,4,1,2,3).reshape(B*NPD,K,NPH,NPW).float()
-    pred2 = pred2.permute(0,4,1,2,3).reshape(B*NPD,K,NPH,NPW).float()
-    gt1 = gt1.permute(0,4,1,2,3).reshape(B*NPD,K,NPH,NPW).float()
-    gt2 = gt2.permute(0,4,1,2,3).reshape(B*NPD,K,NPH,NPW).float()
-
-    # ROI-align and restore original dimensions
-    # Note: the roi_align function considers [0,0] the bottom-left corner, that's why ibox is [y1,x1,y2,x2]
-    pred1_align = ops.roi_align(pred1, boxes=align1, output_size=(NPH, NPW), aligned=True).reshape(B, NPD, K, NPH, NPW).permute(0,2,3,4,1)
-    pred2_align = ops.roi_align(pred2, boxes=align2, output_size=(NPH, NPW), aligned=True).reshape(B, NPD, K, NPH, NPW).permute(0,2,3,4,1)
-    gt1_align = ops.roi_align(gt1, boxes=align1, output_size=(NPH, NPW), aligned=True).reshape(B, NPD, K, NPH, NPW).permute(0,2,3,4,1)
-    gt2_align = ops.roi_align(gt2, boxes=align2, output_size=(NPH, NPW), aligned=True).reshape(B, NPD, K, NPH, NPW).permute(0,2,3,4,1)
-
-    return pred1_align, pred2_align, gt1_align, gt2_align
+    return roi_pred1, roi_pred2, roi_gt1, roi_gt2

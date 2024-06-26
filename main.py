@@ -2,11 +2,10 @@ import argparse
 import os
 import warnings
 
-import torch.backends.cudnn
-from train_2d import train_pcrlv2
+from train_2d import train_pcrlv2_2d, train_cluster_2d
 from train_3d import train_pcrlv2_3d, train_cluster_3d
-from data import DataGenerator, get_dataloader
-from utils import set_seed, create_logger
+from data import get_dataloader
+from tools import set_seed, create_logger
 from finetune import train_lidc_segmentation, test_lidc_segmentation, train_brats_segmentation, test_brats_segmentation, train_lits_segmentation, test_lits_segmentation
 
 
@@ -18,7 +17,7 @@ if __name__ == '__main__':
                         help='Path to dataset')
     parser.add_argument('--data_raw', metavar='DIR', default=None,
                         help='Path to unprocessed dataset (This is needed only for the clustering pretask for visualization)')
-    parser.add_argument('--model', metavar='MODEL', default='pcrlv2', choices=['cluster','cluster_att','pcrlv2','genesis','imagenet','scratch'], help='Choose the model')
+    parser.add_argument('--model', metavar='MODEL', default='pcrlv2', choices=['cluster','cluster_patch','pcrlv2','genesis','imagenet','scratch'], help='Choose the model')
     parser.add_argument('--phase', default='pretask', choices=['pretask', 'finetune', 'test'], type=str, help='Choose phase: pretask or finetune or test')
     parser.add_argument('--pretrained', default='encoder', choices=['all', 'encoder', 'none'], type=str, help='Choose what is pretrained: all or encoder or none')
     parser.add_argument('--finetune', default='all', choices=['all', 'decoder', 'last'], type=str, help='Choose what to finetune: all or decoder or last')
@@ -30,7 +29,8 @@ if __name__ == '__main__':
     parser.add_argument('--d', default=3, type=int, help='3D or 2D to run')
     parser.add_argument('--workers', default=4, type=int, help='Num of workers')
     parser.add_argument('--gpus', default='0,1,2,3', type=str, help='GPU indices to use')
-    parser.add_argument('--ratio', default=0.8, type=float, help='Ratio of data used for pretraining/finetuning.')
+    parser.add_argument('--cluster_loss', default='ce', choices=['ce', 'swav'], type=str, help='Choose clustering pretraining loss: cross-entropy or swav')
+    parser.add_argument('--ratio', default=1, type=float, help='Ratio of data used for pretraining/finetuning.')
     parser.add_argument('--momentum', default=0.9)
     parser.add_argument('--weight', default=None, type=str, help='Diretory to weights to load')
     parser.add_argument('--weight_decay', default=1e-4)
@@ -39,6 +39,7 @@ if __name__ == '__main__':
     parser.add_argument('--amp', action='store_true', default=False)
     parser.add_argument('--skip_conn', action='store_true', default=False, help='To include skip connections in the U-Net or not. Ideally, use False for pretrain and True for finetune')
     parser.add_argument('--k', default=10, type=int, help='Number of clusters for clustering pretask')
+    parser.add_argument('--upsampler', default='featup', choices=['featup', 'interp'], type=str, help='Choose upsampler that produced the ground truth for dino pixel-level clustering')
     parser.add_argument('--tensorboard', action='store_true', default=False, help='To log on tensorboard or not')
     parser.add_argument('--vis', action='store_true', default=False, help='To visualize by logging prediction images on tensorboard')
     parser.add_argument('--cpu', action='store_true', default=False, help='To run on CPU or not')
@@ -49,7 +50,6 @@ if __name__ == '__main__':
     print()
 
     os.environ["CUDA_VISIBLE_DEVICES"] = args.gpus
-    torch.backends.cudnn.benchmark = True
 
     # Set seed
     set_seed(args.seed)
@@ -66,9 +66,9 @@ if __name__ == '__main__':
             assert args.pretrained == 'none'
     # Define which models can be pretrained or finetuned
     if args.phase in ['finetune','test']:
-        assert args.model in ['cluster', 'pcrlv2', 'genesis', 'imagenet', 'scratch']
+        assert args.model in ['cluster', 'cluster_patch', 'pcrlv2', 'genesis', 'imagenet', 'scratch']
     elif args.phase == 'pretask':
-        assert args.model in ['cluster', 'pcrlv2']
+        assert args.model in ['cluster', 'cluster_patch', 'pcrlv2']
 
     # Create logger
     writer, run_dir = create_logger(args)
@@ -77,14 +77,18 @@ if __name__ == '__main__':
         
     # 2D PCRLv2 Pretask
     if args.model == 'pcrlv2' and args.phase == 'pretask' and args.d == 2:
-        train_pcrlv2(args, data_loader, run_dir, writer=writer)
+        train_pcrlv2_2d(args, data_loader, run_dir, writer=writer)
+
+    # 2D Cluster Pretask
+    if 'cluster' in args.model and args.phase == 'pretask' and args.d == 2:
+        train_cluster_2d(args, data_loader, run_dir, writer=writer)
     
     # 3D PCRLv2 Pretask
     elif args.model == 'pcrlv2' and args.phase == 'pretask' and args.d == 3:
         train_pcrlv2_3d(args, data_loader, run_dir, writer=writer)
 
     # 3D Clustering Pretask 
-    elif args.model == 'cluster' and args.phase == 'pretask' and args.d == 3:
+    elif 'cluster' in args.model and args.phase == 'pretask' and args.d == 3:
         train_cluster_3d(args, data_loader, run_dir, writer=writer)
 
     # Finetuning + Testing

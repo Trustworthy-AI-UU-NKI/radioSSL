@@ -8,9 +8,53 @@ Document: [link](https://dspace.uba.uva.nl/server/api/core/bitstreams/c6347794-e
 _Deep neural networks have the potential to revolutionize diagnosis in radiology by enabling faster and more precise interpretation of medical images. Despite the success of supervised learning to train these models, its dependency on large annotated datasets presents a major limitation due to the difficulty in acquiring and labeling medical images. This has led to a growing interest in self-supervised learning, which alleviates this issue by generating an artificial supervisory signal from the data itself. This thesis explores the potential of self-supervised learning for segmenting 3D radiology scans. Inspired by previous spatially dense self-supervised methods that showed great success with 2D natural images, we propose patch-level and pixel-level volumetric clustering as a novel pretext task for representation learning on 3D medical data without labels. We evaluated this approach on brain tumor and liver segmentation under limited annotation conditions. Our findings indicate that, while it did not surpass other state-of-the-art self-supervised methods on average, it demonstrated promising results in certain tasks. Moreover, it enhanced segmentation accuracy compared to purely supervised learning and yielded anatomically meaningful representations. However, challenges such as noisy cluster assignments and foreground-background imbalance were observed, suggesting the need for further refinement._
 
 ## Datasets
-* BraTS-18
-* LiTS-17
-* LUNA-16
+### [BraTS-18](https://www.kaggle.com/datasets/harshitsinghai/miccai-brats2018-original-dataset) | [LiTS-17](https://competitions.codalab.org/competitions/17094#participate-get-data) | [LUNA-16](https://luna16.grand-challenge.org/Download/)
+
+```
+data/
+├── BraTS18/
+│   ├── HGG/
+│   │   └── Brats18_X_X_X/
+│   │       ├── Brats18_X_X_X_flair.nii.gz 
+│   │       ├── Brats18_X_X_X_t1.nii.gz 
+│   │       ├── Brats18_X_X_X_t1ce.nii.gz 
+│   │       └── Brats18_X_X_X_seg.nii.gz 
+│   └── LGG/
+│       └── ...
+├── LiTS17/
+|   ├── train/
+|   │   ├── ct/
+|   │   │   ├── volume-0.nii
+|   │   │   ├── ...
+|   │   │   ├── volume-27.nii
+|   │   │   ├── volume-48.nii
+|   │   │   ├── ...
+|   │   │   └── volume-130.nii
+|   │   └── seg/
+|   │       ├── segmentation-0.nii
+|   │       ├── ...
+|   │       ├── segmentation-27.nii
+|   │       ├── segmentation-48.nii
+|   │       ├── ...
+|   │       └── segmentation-130.nii
+|   └── val/
+|       ├── ct/
+|       │   ├── volume-28.nii
+|       │   ├── ...
+|       │   └── volume-47.nii
+|       └── seg/
+|           ├── segmentation-28.nii
+|           ├── ...
+|           └── segmentation-47.nii
+└── LUNA16/
+    ├── subset0/
+    │   ├── X.X.X.X.X.X.X.X.X.X.X.X.X.raw
+    │   └── X.X.X.X.X.X.X.X.X.X.X.X.X.mhd
+    ├── ...
+    └── subset9/
+        └── ...
+
+```
 
 ## Learning Tasks
 * Pretext Tasks: \
@@ -24,11 +68,14 @@ _Deep neural networks have the potential to revolutionize diagnosis in radiology
     * Brain Tumor Segmentation (BraTS)
     * Liver Segmentation (LiTS)
 
-## Results
+## Method
 ### Patch-level Clustering
- ![alt text](images/patch_cluster.png)
+ ![img](images/method_patch_cluster.png)
 ### Pixel-level Clustering
- ![alt text](images/pixel_cluster.png)
+ ![img](images/method_pixel_cluster.png)
+
+## Results
+ ![img](images/results_pixel_cluster.png)
 
 ## Requirements
 

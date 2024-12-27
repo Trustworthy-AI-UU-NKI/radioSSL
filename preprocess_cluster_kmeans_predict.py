@@ -70,8 +70,8 @@ if __name__ == '__main__':
     else:
         featup = featup.cpu()
     kmeans = Kmeans(d=384, k=args.k, niter=1, seed=args.seed, verbose=False, gpu=True if not args.cpu else False)
-    centroids = np.load(os.path.join(args.data,f'kmeans_centroids_k{args.k}_{args.upsampler}.npy')) # TODO: add also argument support
-    # centroids = np.load(os.path.join(args.data,f'kmeans_centroids_k{args.k}.npy')) # TODO: add also argument support
+    # centroids = np.load(os.path.join(args.data,f'kmeans_centroids_k{args.k}_{args.upsampler}.npy')) # TODO: add also argument support 
+    centroids = np.load(os.path.join(args.data,f'kmeans_centroids_k{args.k}.npy')) # TODO: add also argument support (Use only the line bove, this line is for debugging old files)
     featup.eval()
 
     # Predict with K-Means --------------------------------------------------------------------------------------------------------------
@@ -84,6 +84,9 @@ if __name__ == '__main__':
 
             input1 = input1.float()
             input2 = input2.float()
+
+            # TODO: remove later:
+            input1 = torch.zeros(input1.shape)
 
             if not args.cpu:
                 input1 = input1.cuda()

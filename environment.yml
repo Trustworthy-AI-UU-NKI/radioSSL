@@ -166,4 +166,3 @@ dependencies:
     - zope-deprecation==4.4.0
     - zope-interface==5.5.2
     - zope-sqlalchemy==1.6
-prefix: /home/igogou/.conda/envs/zhou2023

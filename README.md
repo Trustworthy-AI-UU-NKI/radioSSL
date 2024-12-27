@@ -78,6 +78,7 @@ data/
 
 ## Results
  ![img](images/results_pixel_cluster.png)
+ ![img](images/example_pixel_cluster.png)
 
 ## Requirements
 1. Clone repository to preferred path e.g. ``/path/to/radioSSL``

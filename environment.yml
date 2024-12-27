@@ -1,4 +1,4 @@
-name: zhou23
+name: radiossl
 channels:
   - pytorch
   - nvidia

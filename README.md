@@ -134,5 +134,5 @@ _Note: The pretrained model was finetuned by transfering only the **encoder** fr
 | Brain Tumor Segmentation |  [+](https://drive.google.com/file/d/1YM1UA1qQZ4ieOq3rRvsrrNAGE7BuhiG5/view?usp=drive_link)  |  [+](https://drive.google.com/file/d/11QQwCnug6dyCe0Z6zjisfx1USWIOtnre/view?usp=drive_link)   |
 | Liver Segmentation |  [+](https://drive.google.com/file/d/1VBZy2yvJiMqlItOjXA69T4hjhgLjuWL3/view?usp=drive_link)  |  [+](https://drive.google.com/file/d/1wl0mLAmQunRoDRPRzl90OoW_uYNOlCJp/view?usp=drive_link)   |
 
-## Aknowledgmenets
+## Acknowledgments
 We thank the authors of the following repositories, parts of which were used for this project: [RL4M/PCRLv2](https://github.com/RL4M/PCRLv2), [MrGiovanni/ModelsGenesis](https://github.com/MrGiovanni/ModelsGenesis)
